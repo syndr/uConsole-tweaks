@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+"""While KEY_FRONT (gamepad Select on the uConsole's ZMK keyboard) is held,
+translate ZMK trackball motion into scroll wheel events instead of cursor
+movement. The pointer device is grabbed exclusively for the duration of the
+hold, so the compositor sees scroll events only — no cursor drift.
+
+Listens for KEY_FRONT on the keyd virtual keyboard (vid:pid 0fac:0ade), since
+keyd has an exclusive grab on the physical ZMK keyboard and re-emits all
+non-remapped keys (including KEY_FRONT) through that virtual device.
+
+Resilience: USB re-enumeration of the ZMK device invalidates any open pointer
+fd. We recover by treating ENODEV / OSError from either grab() or read() as
+a signal to close and re-discover both devices via VID/PID scan."""
+
+import select
+import sys
+import time
+
+from evdev import InputDevice, UInput, ecodes, list_devices
+
+KEYD_VID = 0x0FAC
+KEYD_PID = 0x0ADE
+ZMK_VID = 0x1D50
+ZMK_PID = 0x615E
+HOLD_KEY = ecodes.KEY_FRONT  # 140 — gamepad Select on the uConsole
+
+PIXELS_PER_TICK_V = 32
+PIXELS_PER_TICK_H = 32
+
+# 1 = pointer-direction matches scroll-direction (push pointer down → scroll down)
+# -1 = inverted
+DIR_V = 1
+DIR_H = 1
+
+
+def _scan(match):
+    for path in list_devices():
+        try:
+            d = InputDevice(path)
+        except Exception:
+            continue
+        try:
+            if match(d):
+                return d
+        except Exception:
+            pass
+        d.close()
+    return None
+
+
+def find_keyd_kbd():
+    return _scan(lambda d: d.info.vendor == KEYD_VID and d.info.product == KEYD_PID)
+
+
+def find_zmk_ptr():
+    # ZMK composite device exposes both a keyboard and a mouse under the same
+    # VID/PID. Pick the interface that advertises relative-motion events.
+    return _scan(
+        lambda d: d.info.vendor == ZMK_VID
+        and d.info.product == ZMK_PID
+        and ecodes.EV_REL in d.capabilities()
+    )
+
+
+def open_devices():
+    while True:
+        kbd = find_keyd_kbd()
+        ptr = find_zmk_ptr() if kbd is not None else None
+        if kbd is not None and ptr is not None:
+            return kbd, ptr
+        if kbd is not None:
+            kbd.close()
+        if ptr is not None:
+            ptr.close()
+        print("waiting for keyd virtual keyboard + ZMK pointer...",
+              file=sys.stderr, flush=True)
+        time.sleep(2)
+
+
+def main():
+    kbd, ptr = open_devices()
+    ui = UInput(
+        {ecodes.EV_REL: [ecodes.REL_WHEEL, ecodes.REL_HWHEEL]},
+        name="zmk-cursor-scroll",
+    )
+    print(f"listening: kbd={kbd.path} ({kbd.name}) ptr={ptr.path}", flush=True)
+
+    held = False
+    accum_x = accum_y = 0
+
+    while True:
+        watch = [kbd] + ([ptr] if held else [])
+        try:
+            ready, _, _ = select.select(watch, [], [])
+        except InterruptedError:
+            continue
+
+        reopen = False
+        for dev in ready:
+            try:
+                events = list(dev.read())
+            except BlockingIOError:
+                continue
+            except OSError as e:
+                print(f"read error on {dev.path}: {e}", file=sys.stderr, flush=True)
+                reopen = True
+                break
+
+            if dev is kbd:
+                for ev in events:
+                    if ev.type == ecodes.EV_KEY and ev.code == HOLD_KEY:
+                        if ev.value == 1 and not held:
+                            try:
+                                ptr.grab()
+                                held = True
+                                accum_x = accum_y = 0
+                            except OSError as e:
+                                print(f"pointer grab failed ({e}); reopening devices",
+                                      file=sys.stderr, flush=True)
+                                reopen = True
+                                break
+                        elif ev.value == 0 and held:
+                            try:
+                                ptr.ungrab()
+                            except OSError:
+                                pass
+                            held = False
+                if reopen:
+                    break
+            elif dev is ptr and held:
+                emit = False
+                for ev in events:
+                    if ev.type != ecodes.EV_REL:
+                        continue
+                    if ev.code == ecodes.REL_X:
+                        accum_x += ev.value
+                        ticks = int(accum_x / PIXELS_PER_TICK_H)
+                        if ticks:
+                            ui.write(ecodes.EV_REL, ecodes.REL_HWHEEL, ticks * DIR_H)
+                            accum_x -= ticks * PIXELS_PER_TICK_H
+                            emit = True
+                    elif ev.code == ecodes.REL_Y:
+                        accum_y += ev.value
+                        ticks = int(accum_y / PIXELS_PER_TICK_V)
+                        if ticks:
+                            ui.write(ecodes.EV_REL, ecodes.REL_WHEEL, ticks * DIR_V)
+                            accum_y -= ticks * PIXELS_PER_TICK_V
+                            emit = True
+                if emit:
+                    ui.syn()
+
+        if reopen:
+            if held:
+                try:
+                    ptr.ungrab()
+                except Exception:
+                    pass
+                held = False
+            try:
+                kbd.close()
+            except Exception:
+                pass
+            try:
+                ptr.close()
+            except Exception:
+                pass
+            kbd, ptr = open_devices()
+            accum_x = accum_y = 0
+            print(f"reopened: kbd={kbd.path} ptr={ptr.path}", flush=True)
+
+
+if __name__ == "__main__":
+    main()

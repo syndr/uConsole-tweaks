@@ -1,0 +1,17 @@
+[Unit]
+Description=ZMK cursor-to-scroll daemon (KEY_FRONT held → trackball drives wheel)
+After=systemd-udev-settle.service keyd.service
+Wants=systemd-udev-settle.service
+Requires=keyd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/zmk-cursor-scroll
+Restart=on-failure
+RestartSec=2
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
