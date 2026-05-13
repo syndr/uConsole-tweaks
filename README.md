@@ -1,6 +1,6 @@
 # uConsole-tweaks
 
-Small standalone tweaks for the [ClockworkPi uConsole](https://www.clockworkpi.com/uconsole) that don't justify a package of their own. Each tweak lives in its own subdirectory under `tweaks/` with a self-contained `install.sh` / `uninstall.sh` pair, so they can be picked up individually.
+Small standalone tweaks for the [ClockworkPi uConsole](https://www.clockworkpi.com/uconsole), packaged as a single `.deb`. Each tweak lives under `tweaks/<name>/` in the source tree; the build script bundles them all into one `uconsole-tweaks` package.
 
 For larger systems built around uConsole-specific behavior (sleep / power management, etc.) see the sibling repo [uConsole-sleep](https://github.com/syndr/uConsole-sleep).
 
@@ -12,32 +12,41 @@ For larger systems built around uConsole-specific behavior (sleep / power manage
 
 ## Install
 
-Install every tweak:
-
 ```sh
-./install.sh
+make install      # builds uconsole-tweaks.deb and runs `apt install -y ./uconsole-tweaks.deb`
 ```
 
-Install only specific tweaks:
+`apt install` of a local deb auto-resolves the declared `Depends:` (currently `python3`, `python3-evdev`, `keyd`), so you don't need a separate `make deps` step.
+
+To just build the deb without installing:
 
 ```sh
-./install.sh zmk-cursor-scroll
+make build
+ls uconsole-tweaks.deb
 ```
-
-Each tweak's installer is idempotent — re-running it after edits will refresh the installed files and restart the service.
 
 ## Uninstall
 
 ```sh
-./uninstall.sh                  # remove every tweak
-./uninstall.sh zmk-cursor-scroll
+make uninstall    # dpkg -r uconsole-tweaks
+```
+
+## Other targets
+
+```sh
+make status       # systemctl status for shipped services
+make logs         # journalctl -f -u <each shipped service>
+make reinstall    # clean + install
+make clean        # remove build artifacts
+make help         # list all targets
 ```
 
 ## Adding a new tweak
 
-1. Create `tweaks/<your-tweak>/` with whatever files it needs (script, unit, udev rule, etc.).
-2. Add an executable `install.sh` and `uninstall.sh` to that directory. Keep them self-contained — the top-level wrappers just invoke them.
-3. Document it in this README.
+1. Create `tweaks/<your-tweak>/` with the files it needs (script, unit, udev rule, ...).
+2. Extend `make_uconsole-tweaks_package.sh` to copy the new files into the staging tree and (if it ships a systemd unit) enable it in `DEBIAN/postinst` and disable it in `DEBIAN/prerm`.
+3. Add it to the `SERVICES :=` line in the `Makefile` if you want it picked up by `make status` / `make logs`.
+4. Document it in this README.
 
 ## License
 

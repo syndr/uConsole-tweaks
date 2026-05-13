@@ -1,3 +1,5 @@
+*.deb
+uconsole-tweaks/
 __pycache__/
 *.pyc
 *.swp
