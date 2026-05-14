@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""While KEY_FRONT (gamepad Select on the uConsole's ZMK keyboard) is held,
+"""While KEY_F24 is held on the keyd virtual keyboard (vid:pid 0fac:0ade),
 translate ZMK trackball motion into scroll wheel events instead of cursor
 movement. The pointer device is grabbed exclusively for the duration of the
 hold, so the compositor sees scroll events only — no cursor drift.
 
-Listens for KEY_FRONT on the keyd virtual keyboard (vid:pid 0fac:0ade), since
-keyd has an exclusive grab on the physical ZMK keyboard and re-emits all
-non-remapped keys (including KEY_FRONT) through that virtual device.
+KEY_F24 is what keyd emits when gamepad Select (KEY_FRONT) is held >200ms;
+see the keyd-uconsole tweak. Tapping Select still emits KEY_FRONT for apps
+and games that expect it. The indirection via F24 is what keeps Select-press
+from leaking into the focused app as a real keystroke (which terminals etc.
+interpret as 'exit scrollback / jump to bottom').
 
 Resilience: USB re-enumeration of the ZMK device invalidates any open pointer
 fd. We recover by treating ENODEV / OSError from either grab() or read() as
@@ -22,10 +24,11 @@ KEYD_VID = 0x0FAC
 KEYD_PID = 0x0ADE
 ZMK_VID = 0x1D50
 ZMK_PID = 0x615E
-HOLD_KEY = ecodes.KEY_FRONT  # 140 — gamepad Select on the uConsole
+HOLD_KEY = ecodes.KEY_F24  # 194 — emitted by keyd when gamepad Select is held >200ms (see keyd-uconsole)
 
-PIXELS_PER_TICK_V = 32
-PIXELS_PER_TICK_H = 32
+PIXELS_PER_TICK_V = 64
+PIXELS_PER_TICK_H = 64
+HI_RES_PER_NOTCH = 120  # Linux kernel convention: 120 hi-res units = 1 legacy notch
 
 # 1 = pointer-direction matches scroll-direction (push pointer down → scroll down)
 # -1 = inverted
@@ -80,13 +83,17 @@ def open_devices():
 def main():
     kbd, ptr = open_devices()
     ui = UInput(
-        {ecodes.EV_REL: [ecodes.REL_WHEEL, ecodes.REL_HWHEEL]},
+        {ecodes.EV_REL: [
+            ecodes.REL_WHEEL,        ecodes.REL_HWHEEL,
+            ecodes.REL_WHEEL_HI_RES, ecodes.REL_HWHEEL_HI_RES,
+        ]},
         name="zmk-cursor-scroll",
     )
     print(f"listening: kbd={kbd.path} ({kbd.name}) ptr={ptr.path}", flush=True)
 
     held = False
-    accum_x = accum_y = 0
+    accum_hi_x = accum_hi_y = 0        # pointer-pixel × HI_RES_PER_NOTCH (drives REL_*_HI_RES)
+    accum_notch_x = accum_notch_y = 0  # pointer-pixel (drives legacy REL_HWHEEL/REL_WHEEL)
 
     while True:
         watch = [kbd] + ([ptr] if held else [])
@@ -113,7 +120,8 @@ def main():
                             try:
                                 ptr.grab()
                                 held = True
-                                accum_x = accum_y = 0
+                                accum_hi_x = accum_hi_y = 0
+                                accum_notch_x = accum_notch_y = 0
                             except OSError as e:
                                 print(f"pointer grab failed ({e}); reopening devices",
                                       file=sys.stderr, flush=True)
@@ -133,18 +141,30 @@ def main():
                     if ev.type != ecodes.EV_REL:
                         continue
                     if ev.code == ecodes.REL_X:
-                        accum_x += ev.value
-                        ticks = int(accum_x / PIXELS_PER_TICK_H)
-                        if ticks:
-                            ui.write(ecodes.EV_REL, ecodes.REL_HWHEEL, ticks * DIR_H)
-                            accum_x -= ticks * PIXELS_PER_TICK_H
+                        accum_hi_x    += ev.value * HI_RES_PER_NOTCH
+                        accum_notch_x += ev.value
+                        hi    = int(accum_hi_x    / PIXELS_PER_TICK_H)  # truncates toward zero
+                        notch = int(accum_notch_x / PIXELS_PER_TICK_H)
+                        if hi:
+                            ui.write(ecodes.EV_REL, ecodes.REL_HWHEEL_HI_RES, hi * DIR_H)
+                            accum_hi_x -= hi * PIXELS_PER_TICK_H
+                            emit = True
+                        if notch:
+                            ui.write(ecodes.EV_REL, ecodes.REL_HWHEEL, notch * DIR_H)
+                            accum_notch_x -= notch * PIXELS_PER_TICK_H
                             emit = True
                     elif ev.code == ecodes.REL_Y:
-                        accum_y += ev.value
-                        ticks = int(accum_y / PIXELS_PER_TICK_V)
-                        if ticks:
-                            ui.write(ecodes.EV_REL, ecodes.REL_WHEEL, ticks * DIR_V)
-                            accum_y -= ticks * PIXELS_PER_TICK_V
+                        accum_hi_y    += ev.value * HI_RES_PER_NOTCH
+                        accum_notch_y += ev.value
+                        hi    = int(accum_hi_y    / PIXELS_PER_TICK_V)
+                        notch = int(accum_notch_y / PIXELS_PER_TICK_V)
+                        if hi:
+                            ui.write(ecodes.EV_REL, ecodes.REL_WHEEL_HI_RES, hi * DIR_V)
+                            accum_hi_y -= hi * PIXELS_PER_TICK_V
+                            emit = True
+                        if notch:
+                            ui.write(ecodes.EV_REL, ecodes.REL_WHEEL, notch * DIR_V)
+                            accum_notch_y -= notch * PIXELS_PER_TICK_V
                             emit = True
                 if emit:
                     ui.syn()
@@ -165,7 +185,8 @@ def main():
             except Exception:
                 pass
             kbd, ptr = open_devices()
-            accum_x = accum_y = 0
+            accum_hi_x = accum_hi_y = 0
+            accum_notch_x = accum_notch_y = 0
             print(f"reopened: kbd={kbd.path} ptr={ptr.path}", flush=True)
 
 

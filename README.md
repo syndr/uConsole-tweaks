@@ -9,6 +9,7 @@ For larger systems built around uConsole-specific behavior (sleep / power manage
 | Name | What it does |
 | --- | --- |
 | [`zmk-cursor-scroll`](tweaks/zmk-cursor-scroll) | While the gamepad `Select` key is held, the trackball drives the scroll wheel instead of the cursor. |
+| [`keyd-uconsole`](tweaks/keyd-uconsole) | keyd config scoped to the ZMK keyboard sub-device — maps Tab (hold) → Super, and is what enables the keyd virtual keyboard that `zmk-cursor-scroll` depends on. |
 
 ## Install
 
