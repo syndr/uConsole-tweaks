@@ -2,6 +2,10 @@
 
 Small standalone tweaks for the [ClockworkPi uConsole](https://www.clockworkpi.com/uconsole), packaged as a single `.deb`. Each tweak lives under `tweaks/<name>/` in the source tree; the build script bundles them all into one `uconsole-tweaks` package.
 
+These tweaks assume the third-party [uConsole Trackpad Keyboard](https://hack2you.tech/products/uconsole-trackpad-keyboard) — a ZMK-based replacement keyboard made by [lululvlv](https://forum.clockworkpi.com/u/lululvlv) and sold at [hack2you.tech](https://hack2you.tech/products/uconsole-trackpad-keyboard). The gamepad keys and trackball behavior they hook into come from that device.
+
+If you have the **stock uConsole keyboard**, flash the [qmk-uconsole](https://github.com/j1n6/qmk-uconsole) firmware to it instead — it offers superior features and is the recommended setup.
+
 For larger systems built around uConsole-specific behavior (sleep / power management, etc.) see the sibling repo [uConsole-sleep](https://github.com/syndr/uConsole-sleep).
 
 ## Tweaks
