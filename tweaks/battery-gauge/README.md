@@ -78,10 +78,25 @@ Constants at the top of the script:
 | `EMA_ALPHA` | Cross-invocation smoothing (`0`=off … `1`=none). Damps jitter from current spikes. |
 | `OCV_CURVE` | Per-cell open-circuit-voltage → SoC table, linearly interpolated. |
 
-**Calibrating `R_INTERNAL_OHMS`:** let the pack sit near-idle (screen off) and
-note `voltage_now` and `current_now`; that near-zero-load voltage is close to the
-true OCV. Then under a known load, adjust `R_INTERNAL_OHMS` until the loaded
-estimate lands on the same OCV.
+**Calibrating `R_INTERNAL_OHMS`:** run the bundled helper, which measures the
+pack's internal resistance directly:
+
+```sh
+uconsole-battery-calibrate
+```
+
+It requires the device to be **on battery** (aborts if the charger is plugged
+in). Turn the screen off and leave it alone; it samples the battery at idle,
+spins every CPU core to draw a large extra current, samples again, and reports
+`R = (V_idle - V_load) / (|I_load| - |I_idle|)` — the ohmic response to the
+current step, with the unknown OCV cancelled out. Copy the suggested value into
+`R_INTERNAL_OHMS` (in both `/usr/local/bin/uconsole-battery` and the repo copy,
+so it survives reinstall). Run it a couple of times at different charge levels
+and average if you want to be thorough.
+
+Manual alternative: let the pack sit near-idle (screen off), note `voltage_now`
+(≈ true OCV) and `current_now`, then under a known load adjust `R_INTERNAL_OHMS`
+until the loaded estimate lands on that OCV.
 
 ## Accuracy caveats
 

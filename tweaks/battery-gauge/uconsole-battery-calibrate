@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""Estimate R_INTERNAL_OHMS for uconsole-battery.
+
+uconsole-battery reconstructs open-circuit voltage from the loaded terminal
+voltage using R_INTERNAL_OHMS (the pack's internal resistance). This tool
+measures that resistance directly instead of guessing it.
+
+Method — two-point delta-V/delta-I. Internal resistance is the ohmic response
+to a change in current at (essentially) constant state-of-charge:
+
+    R = (V_idle - V_load) / (|I_load| - |I_idle|)
+
+We sample the battery at rest, spin every CPU core to draw a large extra
+current, sample again, and divide the voltage sag by the current step. The
+unknown OCV cancels, so no "true 100%/0%" reference is needed.
+
+Requirements (checked before measuring):
+  * Must be on battery (discharging) — abort if the charger is plugged in,
+    because charge current and dynamics would corrupt the measurement.
+  * Baseline load should be low and steady — turn the screen off and leave the
+    device alone. The tool warns if the idle current is noisy or already high.
+  * The induced current step must be large enough to measure cleanly.
+
+Output is the suggested R_INTERNAL_OHMS value to set in uconsole-battery.
+"""
+
+import argparse
+import glob
+import os
+import statistics
+import sys
+import time
+
+BATTERY_NAME = "axp20x-battery"
+
+# Plausibility bounds for a uConsole 2P Li-ion pack (ohms). Results outside
+# this range almost certainly mean a noisy/invalid run, not a real value.
+R_MIN, R_MAX = 0.03, 0.40
+# Minimum current step (A) for a trustworthy delta-V/delta-I.
+MIN_DELTA_I = 0.25
+# Idle noise ceiling (A, stddev): above this the "rest" point isn't at rest.
+MAX_IDLE_STDDEV = 0.12
+
+
+def find_battery():
+    base = "/sys/class/power_supply"
+    p = os.path.join(base, BATTERY_NAME)
+    if os.path.isdir(p):
+        return p
+    for path in sorted(glob.glob(os.path.join(base, "*"))):
+        try:
+            with open(os.path.join(path, "type")) as fh:
+                if fh.read().strip() == "Battery":
+                    return path
+        except OSError:
+            continue
+    return None
+
+
+def read_int(path, name):
+    try:
+        with open(os.path.join(path, name)) as fh:
+            return int(fh.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def read_str(path, name):
+    try:
+        with open(os.path.join(path, name)) as fh:
+            return fh.read().strip()
+    except OSError:
+        return None
+
+
+def ac_online():
+    """True if any AC/USB supply reports online, else False."""
+    for path in glob.glob("/sys/class/power_supply/*"):
+        t = read_str(path, "type")
+        if t in ("Mains", "USB", "USB_PD", "USB_ACA") or "ac" in os.path.basename(path).lower():
+            if read_int(path, "online") == 1:
+                return True
+    return False
+
+
+def sample(path, duration, interval):
+    """Average voltage (V) and current (A) over `duration` seconds."""
+    vs, cs = [], []
+    end = time.monotonic() + duration
+    while time.monotonic() < end:
+        v = read_int(path, "voltage_now")
+        c = read_int(path, "current_now")
+        if v is not None and c is not None:
+            vs.append(v / 1e6)
+            cs.append(c / 1e6)
+        time.sleep(interval)
+    if not vs:
+        return None
+    return {
+        "v": statistics.median(vs),
+        "i": statistics.median(cs),
+        "i_sd": statistics.pstdev(cs) if len(cs) > 1 else 0.0,
+        "n": len(vs),
+    }
+
+
+def spin_cores(duration):
+    """Fork one busy-loop worker per core; they self-exit after `duration`."""
+    pids = []
+    for _ in range(os.cpu_count() or 4):
+        pid = os.fork()
+        if pid == 0:
+            end = time.monotonic() + duration
+            x = 0
+            while time.monotonic() < end:
+                x = (x + 1) & 0xFFFFFFFF
+            os._exit(0)
+        pids.append(pid)
+    return pids
+
+
+def reap(pids):
+    for pid in pids:
+        try:
+            os.waitpid(pid, 0)
+        except ChildProcessError:
+            pass
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--window", type=float, default=6.0,
+                    help="seconds to average at each point (default 6)")
+    ap.add_argument("--settle", type=float, default=2.0,
+                    help="seconds to let voltage settle after a load change (default 2)")
+    ap.add_argument("--interval", type=float, default=0.2,
+                    help="seconds between samples (default 0.2)")
+    args = ap.parse_args()
+
+    path = find_battery()
+    if path is None:
+        print("error: no battery found under /sys/class/power_supply", file=sys.stderr)
+        return 2
+
+    status = read_str(path, "status")
+    if ac_online() or status == "Charging" or status == "Full":
+        print(f"error: battery is not discharging (status={status}, charger appears connected).",
+              file=sys.stderr)
+        print("       Unplug the charger and run again on battery.", file=sys.stderr)
+        return 1
+
+    print("uconsole-battery calibration — delta-V/delta-I internal resistance")
+    print(f"battery: {os.path.basename(path)}  status={status}")
+    print("Keep the screen off and don't touch the device while it runs.\n")
+
+    time.sleep(args.settle)
+    print(f"measuring idle load ({args.window:.0f}s) ...")
+    idle = sample(path, args.window, args.interval)
+    if idle is None:
+        print("error: could not read battery during idle sample", file=sys.stderr)
+        return 2
+
+    print(f"applying CPU load on {os.cpu_count()} cores ...")
+    pids = spin_cores(args.settle + args.window + 0.5)
+    time.sleep(args.settle)
+    load = sample(path, args.window, args.interval)
+    reap(pids)
+    if load is None:
+        print("error: could not read battery during load sample", file=sys.stderr)
+        return 2
+
+    dv = idle["v"] - load["v"]
+    di = abs(load["i"]) - abs(idle["i"])
+
+    print()
+    print(f"  idle:  V={idle['v']:.4f} V  I={idle['i']:+.3f} A  "
+          f"(noise ±{idle['i_sd']:.3f} A, {idle['n']} samples)")
+    print(f"  load:  V={load['v']:.4f} V  I={load['i']:+.3f} A  "
+          f"(noise ±{load['i_sd']:.3f} A, {load['n']} samples)")
+    print(f"  dV={dv:.4f} V   dI={di:.3f} A")
+    print()
+
+    warns = []
+    if idle["i_sd"] > MAX_IDLE_STDDEV:
+        warns.append(f"idle current is noisy (±{idle['i_sd']:.3f} A) — close apps / turn the screen off")
+    if abs(idle["i"]) > 0.9:
+        warns.append(f"idle draw is high ({abs(idle['i']):.2f} A) — screen likely on; result less reliable")
+    if di < MIN_DELTA_I:
+        warns.append(f"current step too small (dI={di:.3f} A < {MIN_DELTA_I} A) — result unreliable")
+    if dv <= 0:
+        warns.append("voltage did not sag under load — cannot compute R")
+
+    if dv <= 0 or di <= 0:
+        for w in warns:
+            print(f"  ! {w}", file=sys.stderr)
+        print("calibration failed; try again with the screen off and nothing else running.",
+              file=sys.stderr)
+        return 1
+
+    r = dv / di
+    for w in warns:
+        print(f"  ! {w}")
+
+    clamped = max(R_MIN, min(R_MAX, r))
+    if clamped != r:
+        print(f"  ! measured R={r:.3f} ohm is outside the plausible range "
+              f"[{R_MIN}, {R_MAX}] — likely a bad run")
+    print(f"\nSuggested R_INTERNAL_OHMS = {clamped:.3f}")
+    print("Set it near the top of /usr/local/bin/uconsole-battery, e.g.:")
+    print(f"    R_INTERNAL_OHMS = {clamped:.3f}")
+    print("(also update tweaks/battery-gauge/uconsole-battery in the repo so it survives reinstall)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
