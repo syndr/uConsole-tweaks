@@ -37,11 +37,11 @@ BATTERY_NAME = "axp20x-battery"
 
 # Pack internal resistance (ohms), used to reconstruct open-circuit voltage from
 # the loaded terminal voltage. The single biggest lever on accuracy: too low and
-# the gauge reads pessimistic under load, too high and it reads optimistic. The
-# uConsole 2P Li-ion pack lands around 0.10-0.15 R total (cells + protection FETs
-# + connector). Calibrate: note OCV at rest (screen off, near-idle current) and
-# nudge this until the loaded estimate matches. See README.
-R_INTERNAL_OHMS = 0.12
+# the gauge reads pessimistic under load, too high and it reads optimistic.
+# Default 0.08 is the delta-V/delta-I measured value for the uConsole 2P Li-ion
+# pack (three runs, 0.074-0.083). Re-measure with uconsole-battery-calibrate; see
+# README.
+R_INTERNAL_OHMS = 0.08
 
 # Clamp on the IR correction so a transient current spike can't throw the OCV
 # wildly off the curve.
