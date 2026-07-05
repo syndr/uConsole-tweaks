@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STAGE="$SCRIPT_DIR/uconsole-tweaks"
-VERSION="${ENV_VERSION:-0.1.0}"
+VERSION="${ENV_VERSION:-0.2.0}"
 
 rm -rf "$STAGE"
 mkdir -p "$STAGE/DEBIAN"
@@ -19,6 +19,11 @@ install -m 0755 "$SCRIPT_DIR/tweaks/zmk-cursor-scroll/zmk-cursor-scroll" \
 
 install -m 0644 "$SCRIPT_DIR/tweaks/zmk-cursor-scroll/zmk-cursor-scroll.service" \
     "$STAGE/etc/systemd/system/zmk-cursor-scroll.service"
+
+# --- battery-gauge ------------------------------------------------------------
+
+install -m 0755 "$SCRIPT_DIR/tweaks/battery-gauge/uconsole-battery" \
+    "$STAGE/usr/local/bin/uconsole-battery"
 
 # --- keyd-uconsole ------------------------------------------------------------
 
@@ -43,6 +48,9 @@ Description: Small standalone tweaks for the ClockworkPi uConsole.
  Ships:
    * zmk-cursor-scroll - hold the gamepad Select key to make the trackball
      drive the scroll wheel instead of the cursor.
+   * battery-gauge - uconsole-battery, a voltage-based state-of-charge
+     estimator that works around the AXP223 PMIC's stuck fuel-gauge register
+     (kernel capacity pinned at 100%).
    * keyd-uconsole - keyd config scoping to the ZMK keyboard sub-device and
      mapping Tab (hold) -> Super. Also enables the keyd virtual keyboard that
      zmk-cursor-scroll listens on.

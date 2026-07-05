@@ -14,6 +14,7 @@ For larger systems built around uConsole-specific behavior (sleep / power manage
 | --- | --- |
 | [`zmk-cursor-scroll`](tweaks/zmk-cursor-scroll) | While the gamepad `Select` key is held, the trackball drives the scroll wheel instead of the cursor. |
 | [`keyd-uconsole`](tweaks/keyd-uconsole) | keyd config scoped to the ZMK keyboard sub-device — maps Tab (hold) → Super, and is what enables the keyd virtual keyboard that `zmk-cursor-scroll` depends on. |
+| [`battery-gauge`](tweaks/battery-gauge) | `uconsole-battery`, a voltage-based state-of-charge estimator that works around the AXP223 PMIC's stuck fuel-gauge register (kernel `capacity` pinned at 100%). Feeds a waybar custom module. |
 
 ## Install
 

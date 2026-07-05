@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""Voltage-based state-of-charge estimator for the uConsole's AXP223 PMIC.
+
+The AXP223 fuel-gauge percentage register (the value the kernel exports as
+/sys/class/power_supply/axp20x-battery/capacity) gets stuck — on this board it
+pins at 100% even while the pack is clearly discharging. upower, waybar's
+built-in `battery` module, hyprlock and swaync all trust that number, so the
+whole desktop loses its battery indicator and you get no low-battery warning
+before a hard cutoff around 3.0 V.
+
+The chip's voltage and current ADCs *are* accurate, so we ignore the broken
+percentage register and estimate SoC from the terminal voltage instead:
+
+  OCV  = V_terminal + I_discharge * R_internal   (add IR drop back under load)
+       = V_terminal - I_charge    * R_internal   (remove IR rise under charge)
+  SoC  = interpolate(OCV) against a Li-ion open-circuit-voltage curve
+
+Output modes:
+  (default)    waybar custom-module JSON: {"text","percentage","tooltip","class"}
+  --percent    just the integer percentage (for scripts)
+  --text       "<pct>% (<state>)"
+
+Tuning lives in the constants below; see the tweak README for the curve and
+how to calibrate R_INTERNAL_OHMS for your specific pack.
+"""
+
+import argparse
+import glob
+import json
+import os
+import sys
+
+# --- tunables ----------------------------------------------------------------
+
+# Preferred power-supply name; falls back to the first Battery-type supply.
+BATTERY_NAME = "axp20x-battery"
+
+# Pack internal resistance (ohms), used to reconstruct open-circuit voltage from
+# the loaded terminal voltage. The single biggest lever on accuracy: too low and
+# the gauge reads pessimistic under load, too high and it reads optimistic. The
+# uConsole 2P Li-ion pack lands around 0.10-0.15 R total (cells + protection FETs
+# + connector). Calibrate: note OCV at rest (screen off, near-idle current) and
+# nudge this until the loaded estimate matches. See README.
+R_INTERNAL_OHMS = 0.12
+
+# Clamp on the IR correction so a transient current spike can't throw the OCV
+# wildly off the curve.
+MAX_IR_CORRECTION_V = 0.35
+
+# Exponential smoothing across invocations (0 = off, 1 = no smoothing). Waybar
+# calls us on an interval with no shared state, so we persist the last value in
+# XDG_RUNTIME_DIR and blend to damp current-spike jitter. Best-effort.
+EMA_ALPHA = 0.5
+
+# Per-cell Li-ion open-circuit-voltage -> state-of-charge curve. Ordered high to
+# low; linearly interpolated between points, clamped at the ends.
+OCV_CURVE = [
+    (4.20, 100), (4.15, 95), (4.11, 90), (4.08, 85), (4.02, 80),
+    (3.98, 75), (3.95, 70), (3.91, 65), (3.87, 60), (3.85, 55),
+    (3.84, 50), (3.82, 45), (3.80, 40), (3.79, 35), (3.77, 30),
+    (3.75, 25), (3.73, 20), (3.71, 15), (3.69, 10), (3.61, 5),
+    (3.50, 3), (3.27, 0),
+]
+
+# waybar `states` thresholds -> CSS class (mirrors the built-in battery module).
+WARNING_PCT = 30
+CRITICAL_PCT = 15
+
+# -----------------------------------------------------------------------------
+
+
+def find_battery():
+    """Return the sysfs path of the battery supply, or None."""
+    base = "/sys/class/power_supply"
+    preferred = os.path.join(base, BATTERY_NAME)
+    if os.path.isdir(preferred):
+        return preferred
+    for path in sorted(glob.glob(os.path.join(base, "*"))):
+        try:
+            with open(os.path.join(path, "type")) as fh:
+                if fh.read().strip() == "Battery":
+                    return path
+        except OSError:
+            continue
+    return None
+
+
+def read_int(path, name):
+    """Read an integer sysfs attribute, or None if absent/unreadable."""
+    try:
+        with open(os.path.join(path, name)) as fh:
+            return int(fh.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def read_str(path, name):
+    try:
+        with open(os.path.join(path, name)) as fh:
+            return fh.read().strip()
+    except OSError:
+        return None
+
+
+def interpolate_soc(ocv):
+    """Map a per-cell open-circuit voltage to a 0-100 SoC via the curve."""
+    if ocv >= OCV_CURVE[0][0]:
+        return 100.0
+    if ocv <= OCV_CURVE[-1][0]:
+        return 0.0
+    for (v_hi, s_hi), (v_lo, s_lo) in zip(OCV_CURVE, OCV_CURVE[1:]):
+        if v_lo <= ocv <= v_hi:
+            frac = (ocv - v_lo) / (v_hi - v_lo)
+            return s_lo + frac * (s_hi - s_lo)
+    return 0.0
+
+
+def smooth(pct):
+    """Blend with the previous reading via EMA, persisted across runs."""
+    if EMA_ALPHA >= 1.0:
+        return pct
+    runtime = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+    state = os.path.join(runtime, "uconsole-battery.state")
+    prev = None
+    try:
+        with open(state) as fh:
+            prev = float(fh.read().strip())
+    except (OSError, ValueError):
+        prev = None
+    blended = pct if prev is None else EMA_ALPHA * pct + (1 - EMA_ALPHA) * prev
+    try:
+        with open(state, "w") as fh:
+            fh.write(f"{blended:.3f}")
+    except OSError:
+        pass
+    return blended
+
+
+def estimate():
+    """Return a dict describing the current battery state."""
+    path = find_battery()
+    if path is None:
+        return None
+
+    status = read_str(path, "status") or "Unknown"
+    v_uv = read_int(path, "voltage_now")
+    i_ua = read_int(path, "current_now")
+    raw_capacity = read_int(path, "capacity")
+
+    if v_uv is None:
+        return None
+
+    voltage = v_uv / 1e6
+    current = (i_ua or 0) / 1e6  # amps; negative = discharging
+
+    # Reconstruct open-circuit voltage. Discharging (I<0) sags the terminal, so
+    # add the drop back; charging (I>0) inflates it, so subtract.
+    ir = current * R_INTERNAL_OHMS
+    ir = max(-MAX_IR_CORRECTION_V, min(MAX_IR_CORRECTION_V, ir))
+    ocv = voltage - ir
+
+    # A full pack sitting on the charger reads ~100 regardless of curve noise.
+    if status == "Full":
+        pct = 100.0
+    else:
+        pct = smooth(interpolate_soc(ocv))
+
+    pct_int = int(round(max(0.0, min(100.0, pct))))
+    power = abs(voltage * current)
+
+    return {
+        "status": status,
+        "voltage": voltage,
+        "current": current,
+        "ocv": ocv,
+        "power": power,
+        "percent": pct_int,
+        "raw_capacity": raw_capacity,
+    }
+
+
+def css_class(st):
+    if st["status"] == "Charging":
+        return "charging"
+    if st["status"] == "Full":
+        return "full"
+    if st["percent"] <= CRITICAL_PCT:
+        return "critical"
+    if st["percent"] <= WARNING_PCT:
+        return "warning"
+    return "discharging"
+
+
+def tooltip(st):
+    lines = [
+        f"Battery {st['percent']}% ({st['status'].lower()})",
+        f"Voltage: {st['voltage']:.3f} V  (OCV est {st['ocv']:.3f} V)",
+        f"Current: {st['current']:+.3f} A",
+        f"Power:   {st['power']:.2f} W",
+    ]
+    if st["raw_capacity"] is not None and st["raw_capacity"] != st["percent"]:
+        lines.append(f"(AXP223 gauge reports {st['raw_capacity']}% — stuck; ignored)")
+    return "\n".join(lines)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("--percent", action="store_true", help="print integer percent only")
+    g.add_argument("--text", action="store_true", help="print '<pct>% (<state>)'")
+    args = ap.parse_args()
+
+    st = estimate()
+    if st is None:
+        if args.percent:
+            print("0")
+        elif args.text:
+            print("no battery")
+        else:
+            print(json.dumps({"text": "?", "tooltip": "battery not found", "class": "critical"}))
+        return 1
+
+    if args.percent:
+        print(st["percent"])
+    elif args.text:
+        print(f"{st['percent']}% ({st['status'].lower()})")
+    else:
+        cls = css_class(st)
+        print(json.dumps({
+            "text": f"{st['percent']}%",
+            "alt": cls,  # waybar selects format-icons by `alt`; `class` drives CSS
+            "percentage": st["percent"],
+            "tooltip": tooltip(st),
+            "class": cls,
+        }))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

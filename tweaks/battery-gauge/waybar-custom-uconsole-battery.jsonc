@@ -1,0 +1,24 @@
+// Waybar custom module for the voltage-based uConsole battery gauge.
+//
+// 1. Add "custom/uconsole-battery" to a modules-* array in your active waybar
+//    config (e.g. replace the built-in "battery" entry).
+// 2. Merge the block below into that config's top level.
+// 3. Style it in style.css via #custom-uconsole-battery{,.charging,.warning,
+//    .critical,.full} — the same class names the built-in battery module uses.
+//
+// The script emits JSON, so `return-type` MUST be "json". It is stateless and
+// cheap; waybar re-runs it every `interval` seconds.
+"custom/uconsole-battery": {
+	"exec": "/usr/local/bin/uconsole-battery",
+	"return-type": "json",
+	"interval": 30,
+	"tooltip": true,
+	"format": "{icon} {}",
+	"format-icons": {
+		"charging": "",
+		"full": "",
+		"discharging": "",
+		"warning": "",
+		"critical": ""
+	}
+}
