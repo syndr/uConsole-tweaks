@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""While KEY_F24 is held on the keyd virtual keyboard (vid:pid 0fac:0ade),
+"""While KEY_F19 is held on the keyd virtual keyboard (vid:pid 0fac:0ade),
 translate ZMK trackball motion into scroll wheel events instead of cursor
 movement. The pointer device is grabbed exclusively for the duration of the
 hold, so the compositor sees scroll events only — no cursor drift.
 
-KEY_F24 is what keyd emits when gamepad Select (KEY_FRONT) is held >200ms;
-see the keyd-uconsole tweak. Tapping Select still emits KEY_FRONT for apps
-and games that expect it. The indirection via F24 is what keeps Select-press
-from leaking into the focused app as a real keystroke (which terminals etc.
-interpret as 'exit scrollback / jump to bottom').
+KEY_F19 is what keyd emits when gamepad Select is held >200ms; see the
+keyd-uconsole tweak. Select arrives as KEY_FRONT or KEY_CAPSLOCK depending on
+keyboard firmware, and a tap still emits that key. The indirection via F19 is
+what keeps Select-press from leaking into the focused app as a real keystroke
+(which terminals etc. interpret as 'exit scrollback / jump to bottom'). F19
+rather than F24 because the gamepad face buttons send F21-F24.
 
 Resilience: USB re-enumeration of the ZMK device invalidates any open pointer
 fd. We recover by treating ENODEV / OSError from either grab() or read() as
@@ -24,7 +25,7 @@ KEYD_VID = 0x0FAC
 KEYD_PID = 0x0ADE
 ZMK_VID = 0x1D50
 ZMK_PID = 0x615E
-HOLD_KEY = ecodes.KEY_F24  # 194 — emitted by keyd when gamepad Select is held >200ms (see keyd-uconsole)
+HOLD_KEY = ecodes.KEY_F19  # 189 — emitted by keyd when gamepad Select is held >200ms (see keyd-uconsole)
 
 PIXELS_PER_TICK_V = 64
 PIXELS_PER_TICK_H = 64

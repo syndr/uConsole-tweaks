@@ -1,5 +1,5 @@
 [Unit]
-Description=ZMK cursor-to-scroll daemon (KEY_FRONT held → trackball drives wheel)
+Description=ZMK cursor-to-scroll daemon (Select held → trackball drives wheel)
 After=systemd-udev-settle.service keyd.service
 Wants=systemd-udev-settle.service
 Requires=keyd.service
