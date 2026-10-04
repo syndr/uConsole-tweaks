@@ -15,6 +15,7 @@ For larger systems built around uConsole-specific behavior (sleep / power manage
 | [`zmk-cursor-scroll`](tweaks/zmk-cursor-scroll) | While the gamepad `Select` key is held, the trackball drives the scroll wheel instead of the cursor. |
 | [`keyd-uconsole`](tweaks/keyd-uconsole) | keyd config scoped to the ZMK keyboard sub-device — maps Tab (hold) → Super, and is what enables the keyd virtual keyboard that `zmk-cursor-scroll` depends on. |
 | [`battery-gauge`](tweaks/battery-gauge) | `uconsole-battery`, a voltage-based state-of-charge estimator that works around the AXP223 PMIC's stuck fuel-gauge register (kernel `capacity` pinned at 100%). Feeds a waybar custom module. |
+| [`camera`](tweaks/camera) | `uconsole-camera`, a launcher and menu entry for Picamera2's full-featured Qt camera app, for a CSI camera module — full-resolution stills, exposure / focus controls and video, which GNOME Snapshot doesn't offer. |
 
 ## Install
 
@@ -22,7 +23,7 @@ For larger systems built around uConsole-specific behavior (sleep / power manage
 make install      # builds uconsole-tweaks.deb and runs `apt install -y ./uconsole-tweaks.deb`
 ```
 
-`apt install` of a local deb auto-resolves the declared `Depends:` (currently `python3`, `python3-evdev`, `keyd`), so you don't need a separate `make deps` step.
+`apt install` of a local deb auto-resolves the declared `Depends:` (currently `python3`, `python3-evdev`, `keyd`), so you don't need a separate `make deps` step. The `camera` tweak's libraries (`python3-picamera2`, `python3-pyqt5`, `python3-opengl`) are `Recommends:`, which `apt` also installs by default.
 
 To just build the deb without installing:
 

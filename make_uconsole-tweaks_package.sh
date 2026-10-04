@@ -4,13 +4,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STAGE="$SCRIPT_DIR/uconsole-tweaks"
-VERSION="${ENV_VERSION:-0.2.3}"
+VERSION="${ENV_VERSION:-0.3.0}"
 
 rm -rf "$STAGE"
 mkdir -p "$STAGE/DEBIAN"
 mkdir -p "$STAGE/usr/local/bin"
 mkdir -p "$STAGE/etc/systemd/system"
 mkdir -p "$STAGE/etc/keyd"
+mkdir -p "$STAGE/usr/local/share/applications"
+mkdir -p "$STAGE/usr/local/share/uconsole-tweaks/camera"
 
 # --- zmk-cursor-scroll --------------------------------------------------------
 
@@ -33,6 +35,20 @@ install -m 0755 "$SCRIPT_DIR/tweaks/battery-gauge/uconsole-battery-calibrate" \
 install -m 0644 "$SCRIPT_DIR/tweaks/keyd-uconsole/uconsole.conf" \
     "$STAGE/etc/keyd/uconsole.conf"
 
+# --- camera -------------------------------------------------------------------
+
+install -m 0755 "$SCRIPT_DIR/tweaks/camera/uconsole-camera" \
+    "$STAGE/usr/local/bin/uconsole-camera"
+
+install -m 0644 "$SCRIPT_DIR/tweaks/camera/app_full.py" \
+    "$STAGE/usr/local/share/uconsole-tweaks/camera/app_full.py"
+
+install -m 0644 "$SCRIPT_DIR/tweaks/camera/LICENSE.picamera2" \
+    "$STAGE/usr/local/share/uconsole-tweaks/camera/LICENSE.picamera2"
+
+install -m 0644 "$SCRIPT_DIR/tweaks/camera/uconsole-camera.desktop" \
+    "$STAGE/usr/local/share/applications/uconsole-camera.desktop"
+
 # --- DEBIAN/conffiles ---------------------------------------------------------
 
 cat << 'EOF' > "$STAGE/DEBIAN/conffiles"
@@ -47,6 +63,8 @@ Version: $VERSION
 Maintainer: syndr <syndr@ultroncore.net>
 Architecture: all
 Depends: python3, python3-evdev, keyd
+Recommends: python3-picamera2, python3-pyqt5, python3-opengl
+Suggests: python3-opencv
 Description: Small standalone tweaks for the ClockworkPi uConsole.
  Ships:
    * zmk-cursor-scroll - hold the gamepad Select key to make the trackball
@@ -58,6 +76,8 @@ Description: Small standalone tweaks for the ClockworkPi uConsole.
    * keyd-uconsole - keyd config scoping to the ZMK keyboard sub-device and
      mapping Tab (hold) -> Super. Also enables the keyd virtual keyboard that
      zmk-cursor-scroll listens on.
+   * camera - uconsole-camera, a launcher and menu entry for Picamera2's
+     full-featured Qt camera app (app_full.py), for a CSI camera module.
 EOF
 
 # --- DEBIAN/postinst ----------------------------------------------------------
