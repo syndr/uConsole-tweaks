@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STAGE="$SCRIPT_DIR/uconsole-tweaks"
-VERSION="${ENV_VERSION:-0.3.0}"
+VERSION="${ENV_VERSION:-0.3.1}"
 
 rm -rf "$STAGE"
 mkdir -p "$STAGE/DEBIAN"
@@ -40,8 +40,8 @@ install -m 0644 "$SCRIPT_DIR/tweaks/keyd-uconsole/uconsole.conf" \
 install -m 0755 "$SCRIPT_DIR/tweaks/camera/uconsole-camera" \
     "$STAGE/usr/local/bin/uconsole-camera"
 
-install -m 0644 "$SCRIPT_DIR/tweaks/camera/app_full.py" \
-    "$STAGE/usr/local/share/uconsole-tweaks/camera/app_full.py"
+install -m 0644 "$SCRIPT_DIR/tweaks/camera/uconsole-camera-app.py" \
+    "$STAGE/usr/local/share/uconsole-tweaks/camera/uconsole-camera-app.py"
 
 install -m 0644 "$SCRIPT_DIR/tweaks/camera/LICENSE.picamera2" \
     "$STAGE/usr/local/share/uconsole-tweaks/camera/LICENSE.picamera2"
@@ -63,8 +63,7 @@ Version: $VERSION
 Maintainer: syndr <syndr@ultroncore.net>
 Architecture: all
 Depends: python3, python3-evdev, keyd
-Recommends: python3-picamera2, python3-pyqt5, python3-opengl
-Suggests: python3-opencv
+Recommends: python3-picamera2, python3-pyqt5, python3-opengl, python3-opencv
 Description: Small standalone tweaks for the ClockworkPi uConsole.
  Ships:
    * zmk-cursor-scroll - hold the gamepad Select key to make the trackball
@@ -76,8 +75,9 @@ Description: Small standalone tweaks for the ClockworkPi uConsole.
    * keyd-uconsole - keyd config scoping to the ZMK keyboard sub-device and
      mapping Tab (hold) -> Super. Also enables the keyd virtual keyboard that
      zmk-cursor-scroll listens on.
-   * camera - uconsole-camera, a launcher and menu entry for Picamera2's
-     full-featured Qt camera app (app_full.py), for a CSI camera module.
+   * camera - uconsole-camera, a Picamera2 camera app for a CSI camera
+     module, laid out for the uConsole's 1280x720 screen (forked from
+     Picamera2's app_full.py).
 EOF
 
 # --- DEBIAN/postinst ----------------------------------------------------------

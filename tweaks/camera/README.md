@@ -1,7 +1,7 @@
 # camera
 
-A launcher for a full-featured camera app, for a Raspberry Pi CSI camera module
-fitted to the uConsole.
+`uconsole-camera`: a camera app for a Raspberry Pi CSI camera module, laid out
+for the uConsole's 1280x720 screen.
 
 ## The problem
 
@@ -10,11 +10,12 @@ desktop camera apps either can't see it or can't drive it properly. GNOME
 Snapshot works, but only saves 1920x1080 from a 4608x2592 sensor and exposes no
 controls.
 
-Raspberry Pi's own [Picamera2](https://github.com/raspberrypi/picamera2) ships a
-much more capable Qt app, `apps/app_full.py`: full-resolution stills, sensor
-mode and file type selection, exposure / gain / white balance, image tuning,
-pan / zoom, and video recording. It isn't included in the `python3-picamera2`
-package, and it needs one environment tweak to start on a Wayland session.
+Raspberry Pi's [Picamera2](https://github.com/raspberrypi/picamera2) ships a
+capable Qt app, `apps/app_full.py`, but it is built for a desktop monitor: two
+fixed 400px side panels around an 800x600 preview, about 1700px wide, with the
+shutter button cut off at the bottom-left on this screen; its "hide panel"
+button also resizes the window, which a tiling compositor fights, and it
+crashed after a few shots (see below).
 
 ## What this ships
 
@@ -22,36 +23,78 @@ package, and it needs one environment tweak to start on a Wayland session.
 | --- | --- |
 | `/usr/local/bin/uconsole-camera` | Launcher script. |
 | `/usr/local/share/applications/uconsole-camera.desktop` | "uConsole Camera" menu entry. |
-| `/usr/local/share/uconsole-tweaks/camera/app_full.py` | Picamera2's app, unmodified, from tag `v0.3.37`. |
+| `/usr/local/share/uconsole-tweaks/camera/uconsole-camera-app.py` | The app: a fork of Picamera2's `app_full.py` (tag `v0.3.37`). |
 
-The launcher does two things before starting the app:
+## The app
 
-- **Pins `QT_QPA_PLATFORM`** to `wayland` (or `xcb` outside Wayland). The app's
-  GL preview fails at startup with `EGL_BAD_ALLOC` when the variable holds a
-  fallback list such as `wayland;xcb`, which many Wayland sessions export.
-- **Changes into `~/Pictures/Camera`**, because the app saves into the current
-  directory. Files are named after the app's `Name` field, or `test` when it is
-  empty, so set a name to avoid overwriting the previous shot.
-
-## Usage
-
-```sh
-uconsole-camera
+```
++----------------------------------------------+--------------------+
+|                                              | Capture Exposure … |
+|               live preview                   |                    |
+|                                              |  settings drawer   |
+|                                              |  (Tab / ⚙ hides)   |
++----------------------------------------------+--------------------+
+| Photo Video [Shoot] AF  Zoom ----o-- 1.0x   status           [⚙] |
++-------------------------------------------------------------------+
 ```
 
-or pick **uConsole Camera** from the application launcher.
+- **Photo / Video** switch modes; **Shoot** takes a photo, or starts / stops
+  recording in video mode.
+- **Zoom** slider, mouse wheel over the preview, or `+` / `-` / `0` keys; drag
+  the preview to pan.
+- **AF** triggers autofocus. The *Focus* tab sets Continuous (default), Auto
+  (trigger) or Manual with a lens-position slider.
+- **Settings drawer** tabs: *Capture* (save folders, name, format, JPEG quality,
+  resolution, sensor mode, live-preview mode, HDR), *Exposure* (AE/AWB, EV,
+  manual shutter / gain, colour gains), *Focus*, *Tuning* (saturation, contrast,
+  sharpness, brightness), *Zoom* (pan map), *Info* (live metadata), *Other*
+  (every remaining camera control).
+- **HDR** takes a bracket of exposures and writes `_base`, `_mean`, `_debevec`,
+  `_robertson` and `_mertens` versions.
 
-The HDR option is greyed out unless OpenCV is installed:
+Keys: `Space` shoot / record, `Tab` toggle drawer, `F` autofocus, `+` `-` `0`
+zoom, `F11` fullscreen, `Esc` / `Q` quit.
 
-```sh
-sudo apt install python3-opencv
-```
+### Files and preferences
+
+Photos are saved as `IMG_<timestamp>.<ext>` and videos as `VID_<timestamp>.<ext>`
+(or the name you type in *Name*), never overwriting. The default folder is
+`~/Pictures/Camera`; change it, and optionally a separate video folder, in the
+*Capture* tab.
+
+Setup choices are remembered in `~/.config/uconsole-camera/uconsole-camera.conf`:
+folders, formats, JPEG quality, resolution, sensor mode, live-preview mode, video
+preset / quality / frame rate, AF mode, drawer and fullscreen state, last tab.
+Per-shot controls (exposure, gains, tuning sliders, zoom) start fresh each
+launch. *Reset all preferences* clears the file.
+
+The launcher writes the app's output to `~/.cache/uconsole-camera.log` (previous
+run in `.log.1`), so a crash from the menu entry can still be diagnosed.
+
+### Changes from upstream `app_full.py`
+
+- Layout: full-window preview, one bottom bar, one collapsible drawer; the
+  drawer is shown / hidden without resizing the window.
+- Autofocus tab and AF button (upstream deliberately hides the `Af*` controls).
+- Save location, timestamped filenames, JPEG quality, video resolution presets.
+- Preferences persisted with `QSettings`.
+- Keyboard shortcuts; wheel-zoom and drag-pan on the preview.
+- Crash fix: upstream configured stills with `buffer_count=1`, so the Wayland GL
+  preview widget did not hold a reference to the frame it showed, and a repaint
+  after that request was recycled died with
+  `AttributeError: 'NoneType' object has no attribute 'buffers'` (reproducibly
+  on the third shot). The fork uses two buffers, drops the preview's frame before
+  every reconfigure, and guards the repaint.
+- Info-tab metadata formatting only runs while the tab is visible.
 
 ## Requirements
 
-- `python3-picamera2`, `python3-pyqt5` and `python3-opengl` (declared as
-  `Recommends`, so `apt` pulls them in by default).
+- `python3-picamera2`, `python3-pyqt5`, `python3-opengl`, and `python3-opencv`
+  for HDR (all declared as `Recommends`, so `apt` pulls them in by default).
 - A camera that libcamera detects. Check with `rpicam-hello --list-cameras`.
+- The launcher pins `QT_QPA_PLATFORM` to `wayland` (or `xcb` outside Wayland):
+  the GL preview fails at startup with `EGL_BAD_ALLOC` when the variable holds a
+  fallback list such as `wayland;xcb`, which many Wayland sessions export.
 
 ### Enabling the camera on a CM5 uConsole
 
@@ -73,5 +116,5 @@ loads fine.
 
 ## License
 
-`app_full.py` is copyright Raspberry Pi and distributed under the BSD 2-Clause
-License; see [`LICENSE.picamera2`](LICENSE.picamera2).
+The app is derived from Picamera2's `apps/app_full.py`, copyright Raspberry Pi,
+BSD 2-Clause License; see [`LICENSE.picamera2`](LICENSE.picamera2).

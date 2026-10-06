@@ -1,14 +1,16 @@
 #!/bin/sh
-# Launch Picamera2's full-featured Qt camera app (app_full.py) for a CSI camera.
+# Launch uConsole Camera (Picamera2 app sized for the uConsole's 1280x720 screen).
 #
-# The app's GL preview only initialises when Qt is given a single platform.
-# With the "wayland;xcb" fallback list that many Wayland sessions export it
-# dies at startup with EGL_BAD_ALLOC, so pin the platform to match the session.
+# The GL preview only initialises when Qt is given a single platform. With the
+# "wayland;xcb" fallback list that many Wayland sessions export it dies at
+# startup with EGL_BAD_ALLOC, so pin the platform to match the session.
 #
-# The app saves into the current directory as "<Name>.<type>" ("test" when the
-# Name field is empty), so start it in the pictures folder.
+# Output goes to ~/.cache/uconsole-camera.log (previous run kept as .log.1) so
+# a crash from the menu entry can still be diagnosed; on a terminal it is
+# shown as well.
 
-APP=/usr/local/share/uconsole-tweaks/camera/app_full.py
+APP=/usr/local/share/uconsole-tweaks/camera/uconsole-camera-app.py
+LOG="${XDG_CACHE_HOME:-$HOME/.cache}/uconsole-camera.log"
 
 if [ -n "$WAYLAND_DISPLAY" ]; then
     export QT_QPA_PLATFORM=wayland
@@ -16,8 +18,11 @@ else
     export QT_QPA_PLATFORM=xcb
 fi
 
-dir="$(xdg-user-dir PICTURES 2>/dev/null)"
-dir="${dir:-$HOME/Pictures}/Camera"
-mkdir -p "$dir" && cd "$dir" || exit 1
+mkdir -p "$(dirname "$LOG")"
+[ -f "$LOG" ] && mv -f "$LOG" "$LOG.1"
 
-exec python3 "$APP" "$@"
+if [ -t 2 ]; then
+    python3 -u "$APP" "$@" 2>&1 | tee "$LOG"
+else
+    exec python3 -u "$APP" "$@" >"$LOG" 2>&1
+fi
