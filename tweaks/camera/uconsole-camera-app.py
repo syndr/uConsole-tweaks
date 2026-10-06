@@ -379,6 +379,7 @@ def on_mode_change():
     vid_tab.reset()
     pic_tab.reset()
     capture_tab.stack.setCurrentIndex(1 if is_video else 0)
+    fill_res_combo()
     if is_video:
         rec_button.setText("\u25cf Record")
         switch_config("video")
@@ -929,6 +930,7 @@ class PresetPicker:
 
     def __init__(self, combo, w_box, h_box, presets, label):
         self.combo, self.w_box, self.h_box, self.presets = combo, w_box, h_box, presets
+        self.listeners = []  # called with the preset index after any change
         combo.addItems([label(size) for size in presets] + ["Custom"])
         combo.currentIndexChanged.connect(self.on_combo)
         w_box.valueChanged.connect(self.sync)
@@ -947,6 +949,8 @@ class PresetPicker:
         self.combo.blockSignals(True)
         self.combo.setCurrentIndex(index)
         self.combo.blockSignals(False)
+        for fn in self.listeners:
+            fn(index)
 
 class AECTab(QWidget):
     def __init__(self, is_mono: bool):
@@ -959,6 +963,8 @@ class AECTab(QWidget):
         self.aec_check.stateChanged.connect(self.aec_update)
         self.aec_meter = QComboBox()
         self.aec_meter.addItems(["Centre Weighted", "Spot", "Matrix"])
+        self.aec_meter.setCurrentIndex(pref("exposure/metering", 1))  # Spot by default
+        self.aec_meter.currentIndexChanged.connect(lambda i: prefs.setValue("exposure/metering", i))
         self.aec_meter.currentIndexChanged.connect(self.aec_update)
         self.aec_constraint = QComboBox()
         self.aec_constraint.addItems(["Default", "Highlight"])
@@ -1356,10 +1362,11 @@ class vidTab(QWidget):
         self.update_note()
         self.reset()
 
-    @staticmethod
-    def label(size):
-        names = {(3840, 2160): "4K", (1920, 1080): "1080p", (1280, 720): "720p"}
-        text = f"{names.get(size, '')} {size[0]}x{size[1]}".strip()
+    NAMES = {(3840, 2160): "4K", (1920, 1080): "1080p", (1280, 720): "720p"}
+
+    @classmethod
+    def label(cls, size):
+        text = f"{cls.NAMES.get(size, '')} {size[0]}x{size[1]}".strip()
         fps = sensor_mode_for(size)["fps"]
         if fps < 30:
             text += f" (\u2264{fps:.0f} fps)"
@@ -1771,11 +1778,18 @@ qpicamera2.done_signal.connect(capture_done)
 zoom_slider = QSlider(Qt.Horizontal)
 zoom_slider.setRange(10, 70)
 zoom_slider.setValue(10)
-zoom_slider.setMaximumWidth(180)
+zoom_slider.setMaximumWidth(130)
 zoom_label = QLabel("1.0x")
 zoom_label.setMinimumWidth(36)
-af_button = QPushButton("AF")
-af_button.setToolTip("Trigger autofocus (F)")
+timer_button = QPushButton()
+timer_button.setToolTip("Self-timer: click to cycle Off / 3 / 5 / 10 s")
+ev_box = QDoubleSpinBox()
+ev_box.setPrefix("EV ")
+ev_box.setDecimals(1)
+ev_box.setSingleStep(0.5)
+ev_box.setToolTip("Exposure compensation")
+res_combo = QComboBox()
+res_combo.setToolTip("Resolution preset for the current mode")
 drawer_button = QPushButton("⚙")
 drawer_button.setCheckable(True)
 drawer_button.setToolTip("Settings (Tab)")
@@ -1788,7 +1802,9 @@ bar.setSpacing(6)
 bar.addWidget(photo_button)
 bar.addWidget(video_button)
 bar.addSpacing(12)
-bar.addWidget(af_button)
+bar.addWidget(timer_button)
+bar.addWidget(ev_box)
+bar.addWidget(res_combo)
 bar.addWidget(QLabel("Zoom"))
 bar.addWidget(zoom_slider)
 bar.addWidget(zoom_label)
@@ -1853,8 +1869,78 @@ pic_tab.apply_settings()
 photo_button.toggled.connect(lambda checked: checked and on_mode_change())
 video_button.toggled.connect(lambda checked: checked and on_mode_change())
 zoom_slider.valueChanged.connect(lambda v: pan_tab.pan_display.setZoomLevel(v / 10))
-af_button.clicked.connect(lambda: focus_tab and focus_tab.do_trigger())
-af_button.setEnabled(has_af)
+
+
+# Bar <-> drawer mirrors: self-timer, exposure compensation, resolution preset.
+def timer_label(i):
+    secs = capture_tab.timer_values[i]
+    timer_button.setText("\u23f1 Off" if secs == 0 else f"\u23f1 {secs} s")
+
+
+def cycle_timer():
+    capture_tab.timer.setCurrentIndex((capture_tab.timer.currentIndex() + 1) % capture_tab.timer.count())
+
+
+timer_button.clicked.connect(cycle_timer)
+capture_tab.timer.currentIndexChanged.connect(timer_label)
+timer_label(capture_tab.timer.currentIndex())
+
+ev_box.setRange(picam2.camera_controls["ExposureValue"][0], picam2.camera_controls["ExposureValue"][1])
+ev_box.setValue(aec_tab.exposure_val.value())
+ev_box.valueChanged.connect(lambda v: aec_tab.exposure_val.setValue(v, emit=True))
+
+
+def ev_from_tab():
+    ev_box.blockSignals(True)
+    ev_box.setValue(aec_tab.exposure_val.value())
+    ev_box.blockSignals(False)
+    ev_box.setEnabled(aec_tab.aec_check.isChecked())
+
+
+aec_tab.exposure_val.valueChanged.connect(ev_from_tab)
+aec_tab.aec_check.stateChanged.connect(ev_from_tab)
+ev_from_tab()
+
+
+def active_tab():
+    return vid_tab if video_mode() else pic_tab
+
+
+def short_label(size, video):
+    if video:
+        return vidTab.NAMES.get(size, f"{size[0]}x{size[1]}")
+    return megapixels(size)
+
+
+def fill_res_combo():
+    tab = active_tab()
+    picker = tab.picker
+    res_combo.blockSignals(True)
+    res_combo.clear()
+    res_combo.addItems([short_label(size, tab is vid_tab) for size in picker.presets] + ["Custom"])
+    res_combo.setCurrentIndex(picker.combo.currentIndex())
+    res_combo.blockSignals(False)
+
+
+def res_from_bar(i):
+    tab = active_tab()
+    if i >= len(tab.picker.presets):
+        return  # "Custom" is only ever a reflection of hand-typed values
+    tab.preset.setCurrentIndex(i)
+    tab.apply_settings()
+
+
+def res_from_tab(index):
+    if res_combo.count():
+        res_combo.blockSignals(True)
+        res_combo.setCurrentIndex(index)
+        res_combo.blockSignals(False)
+
+
+res_combo.currentIndexChanged.connect(res_from_bar)
+pic_tab.picker.listeners.append(lambda i: video_mode() or res_from_tab(i))
+vid_tab.picker.listeners.append(lambda i: video_mode() and res_from_tab(i))
+fill_res_combo()
 
 
 def set_drawer(visible):

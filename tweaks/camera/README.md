@@ -34,17 +34,21 @@ crashed after a few shots (see below).
 |                                              |  settings drawer   |
 |                                              |  (Tab / ⚙ hides)   |
 +----------------------------------------------+--------------------+
-| Photo Video  AF  Zoom ---o-- 1.0x  status      [   Shoot   ]  [⚙] |
+| Photo Video ⏱Off EV0.0 11.9MP Zoom --o-- 1.0x status [ Shoot ] [⚙] |
 +-------------------------------------------------------------------+
 ```
 
 - **Photo / Video** switch modes; **Shoot** takes a photo, or starts / stops
-  recording in video mode. A **self-timer** (Off / 3 / 5 / 10 s, in the
-  *Capture* tab) counts down on the button; pressing again cancels.
+  recording in video mode. A **self-timer** (Off / 3 / 5 / 10 s; the ⏱ button
+  cycles it, the *Capture* tab also has it) counts down on the button;
+  pressing again cancels.
+- **EV** on the bar is exposure compensation (greyed out when auto-exposure is
+  off); the **resolution** combo picks a preset for the current mode
+  (megapixels for photos, 4K / 1080p / 720p for video).
 - **Zoom** slider, mouse wheel over the preview (zooms about the cursor), or
   `+` / `-` / `0` keys; drag
   the preview to pan (a tap without dragging focuses instead).
-- **AF** triggers autofocus. The *Focus* tab sets Continuous (default), Auto
+- `F` triggers autofocus. The *Focus* tab sets Continuous (default), Auto
   (trigger) or Manual with a lens-position slider. **Tap the preview** to focus
   on that spot: a box marks the region and the AF window follows it (in
   Continuous mode it keeps tracking there; in Auto/Manual it triggers one
@@ -55,7 +59,7 @@ crashed after a few shots (see below).
   frame-rate ceiling for the chosen size), *Exposure* (AE/AWB, EV,
   manual shutter / gain, colour gains), *Focus*, *Tuning* (saturation, contrast,
   sharpness, brightness), *Zoom* (pan map), *Info* (live metadata), *More*
-  (every remaining camera control).
+  (every remaining camera control). Auto-exposure metering defaults to *Spot*.
 - **HDR** takes a bracket of exposures and writes `_base`, `_mean`, `_debevec`,
   `_robertson` and `_mertens` versions.
 
@@ -76,7 +80,7 @@ Photos are saved as `IMG_<timestamp>.<ext>` and videos as `VID_<timestamp>.<ext>
 *Capture* tab.
 
 Setup choices are remembered in `~/.config/uconsole-camera/uconsole-camera.conf`:
-folders, formats, JPEG quality, self-timer, resolution, sensor mode, live-preview mode, video
+folders, formats, JPEG quality, self-timer, AE metering, resolution, sensor mode, live-preview mode, video
 preset / quality / frame rate, AF mode, drawer and fullscreen state, last tab.
 Per-shot controls (exposure, gains, tuning sliders, zoom) start fresh each
 launch. *Reset all preferences* clears the file.
