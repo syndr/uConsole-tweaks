@@ -752,6 +752,9 @@ class panZoomDisplay(QWidget):
         scaler_crop = tuple(new_scaler_crop)
         picam2.controls.ScalerCrop = scaler_crop
         self.update()
+        # paintEvent also emits this, but only when the pan map is visible; the
+        # bottom-bar slider and label must follow wheel/key zoom regardless.
+        self.updated.emit()
 
     def mouseMoveEvent(self, event):
         pos = event.pos()
