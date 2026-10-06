@@ -109,8 +109,13 @@ def output_path(kind, ext, name=""):
 
 # --- Camera -------------------------------------------------------------------
 
+metadata_crop = None  # ScalerCrop libcamera actually applied to the latest frame
+
+
 def post_callback(request):
+    global metadata_crop
     metadata = request.get_metadata()
+    metadata_crop = metadata.get("ScalerCrop", metadata_crop)
     if info_tab.isVisible():
         sorted_metadata = sorted(metadata.items(), key=lambda x: x[0] if "Awb" not in x[0] else f"Z{x[0]}")
         pretty_metadata = []
@@ -198,21 +203,28 @@ def switch_config(new_config):
 
 
 def update_controls():
-    global scaler_crop
+    global scaler_crop, crop_frame
 
-    # Fix aspect ratio of the pan/zoom
+    # Carry the zoom level and centre across configurations. Sensor modes have
+    # different ScalerCrop frames (the 1536x864 mode is a centre crop at
+    # (768, 432, 3072, 1728) of the 4608x2592 sensor), and upstream kept the old
+    # crop *size* when switching, which produced a crop larger than the frame
+    # with a negative origin - harmless to libcamera, which clamps it, but it
+    # made the pan map and anything else using scaler_crop point at the wrong
+    # place.
     _, full_img, _ = picam2.camera_controls['ScalerCrop']
-    ar = full_img[2] / full_img[3]
-    new_scaler_crop = list(scaler_crop)
-    new_scaler_crop[3] = int(new_scaler_crop[2] / ar)
-    new_scaler_crop[1] += (scaler_crop[3] - new_scaler_crop[3]) // 2
-
-    new_scaler_crop[1] = max(new_scaler_crop[1], full_img[1])
-    new_scaler_crop[1] = min(new_scaler_crop[1], full_img[1] + full_img[3] - new_scaler_crop[3])
-    new_scaler_crop[0] = max(new_scaler_crop[0], full_img[0])
-    new_scaler_crop[0] = min(new_scaler_crop[0], full_img[0] + full_img[2] - new_scaler_crop[2])
-
-    scaler_crop = tuple(new_scaler_crop)
+    ox, oy, ow, oh = crop_frame or full_img
+    zoom = ow / scaler_crop[2] if scaler_crop[2] else 1.0
+    centre_x = (scaler_crop[0] + scaler_crop[2] / 2 - ox) / ow
+    centre_y = (scaler_crop[1] + scaler_crop[3] / 2 - oy) / oh
+    w = int(full_img[2] / zoom)
+    h = int(full_img[3] / zoom)
+    x = int(full_img[0] + centre_x * full_img[2] - w / 2)
+    y = int(full_img[1] + centre_y * full_img[3] - h / 2)
+    x = min(max(x, full_img[0]), full_img[0] + full_img[2] - w)
+    y = min(max(y, full_img[1]), full_img[1] + full_img[3] - h)
+    scaler_crop = (x, y, w, h)
+    crop_frame = full_img
 
     with picam2.controls as controls:
         controls.ScalerCrop = scaler_crop
@@ -764,11 +776,15 @@ class panZoomDisplay(QWidget):
 
 
 class PreviewMouse(QWidget):
-    """Event filter on the preview: wheel zooms, drag pans."""
+    """Event filter on the preview: wheel zooms, drag pans, a tap focuses there."""
+
+    DRAG_THRESHOLD = 6  # px before a press counts as a drag rather than a tap
 
     def __init__(self):
         super().__init__()
         self.last = None
+        self.press = None
+        self.dragged = False
 
     def eventFilter(self, obj, event):
         t = event.type()
@@ -776,18 +792,76 @@ class PreviewMouse(QWidget):
             pan_tab.pan_display.wheelEvent(event)
             return True
         if t == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
-            self.last = event.pos()
+            self.last = self.press = event.pos()
+            self.dragged = False
             return True
         if t == QEvent.MouseMove and self.last is not None and event.buttons() & Qt.LeftButton:
+            if not self.dragged and (event.pos() - self.press).manhattanLength() < self.DRAG_THRESHOLD:
+                return True
+            self.dragged = True
             d = event.pos() - self.last
             self.last = event.pos()
             # Dragging the image moves the crop the opposite way, scaled to the widget size
             pan_tab.pan_display.pan_by(-d.x() / max(obj.width(), 1), -d.y() / max(obj.height(), 1))
             return True
-        if t == QEvent.MouseButtonRelease:
-            self.last = None
+        if t == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+            if self.press is not None and not self.dragged:
+                focus_at(obj, event.pos())
+            self.last = self.press = None
             return True
         return False
+
+
+def preview_to_sensor(widget, pos):
+    """Map a point on the preview widget to sensor coordinates inside the current crop, or None."""
+    dpr = widget.devicePixelRatioF()
+    x_off, y_off, w, h = widget.recalculate_viewport()
+    nx = (pos.x() * dpr - x_off) / max(w, 1)
+    ny = (pos.y() * dpr - y_off) / max(h, 1)
+    if not (0 <= nx <= 1 and 0 <= ny <= 1):
+        return None  # tapped the letterbox bars
+    cx, cy, cw, ch = metadata_crop or scaler_crop
+    return int(cx + nx * cw), int(cy + ny * ch), (nx, ny)
+
+
+def focus_at(widget, pos):
+    """Tap-to-focus: point the AF window at the tapped spot and (re)focus."""
+    if focus_tab is None:
+        return
+    mapped = preview_to_sensor(widget, pos)
+    if mapped is None:
+        return
+    sx, sy, (nx, ny) = mapped
+    cx, cy, cw, ch = metadata_crop or scaler_crop
+    ww, wh = max(cw // 5, 16), max(ch // 5, 16)
+    wx = min(max(sx - ww // 2, cx), cx + cw - ww)
+    wy = min(max(sy - wh // 2, cy), cy + ch - wh)
+    focus_tab.set_window((wx, wy, ww, wh))
+    show_focus_box(nx, ny, ww / cw, wh / ch)
+    set_status("Focusing on the tapped region  (Focus tab: Whole frame to reset)")
+
+
+focus_box_timer = QTimer()
+focus_box_timer.setSingleShot(True)
+focus_box_timer.setInterval(1500)
+
+
+def show_focus_box(nx, ny, fw, fh):
+    """Draw a box over the preview where the AF window is, for a moment."""
+    overlay = np.zeros((360, 640, 4), dtype=np.uint8)
+    x0 = int(min(max(nx - fw / 2, 0), 1 - fw) * 640)
+    y0 = int(min(max(ny - fh / 2, 0), 1 - fh) * 360)
+    x1, y1 = x0 + max(int(fw * 640), 4), y0 + max(int(fh * 360), 4)
+    colour = (80, 255, 80, 230)
+    overlay[y0:y0 + 2, x0:x1] = colour
+    overlay[y1 - 2:y1, x0:x1] = colour
+    overlay[y0:y1, x0:x0 + 2] = colour
+    overlay[y0:y1, x1 - 2:x1] = colour
+    qpicamera2.set_overlay(overlay)
+    focus_box_timer.start()
+
+
+focus_box_timer.timeout.connect(lambda: qpicamera2.set_overlay(None))
 
 
 # --- Settings tabs (upstream, compacted) -------------------------------------------
@@ -1011,6 +1085,12 @@ class FocusTab(QWidget):
         self.lens_label.setWordWrap(True)
         self.trigger = QPushButton("Trigger autofocus (F)")
         self.trigger.clicked.connect(self.do_trigger)
+        self.window = None  # AF window in sensor coordinates, set by tapping the preview
+        self.window_label = QLabel("Metering: whole frame")
+        self.window_label.setWordWrap(True)
+        self.whole_frame = QPushButton("Whole frame")
+        self.whole_frame.setToolTip("Stop focusing on the tapped region")
+        self.whole_frame.clicked.connect(lambda: self.set_window(None))
         self.state = QLabel("AF state: -")
         self._last_state = None
 
@@ -1020,7 +1100,11 @@ class FocusTab(QWidget):
         self.layout.addRow(self.lens_label)
         self.layout.addRow(self.lens)
         self.layout.addRow(self.trigger)
+        self.layout.addRow(self.window_label)
+        self.layout.addRow(self.whole_frame)
+        self.layout.addRow(QLabel("Tap the preview to focus on a spot."))
         self.layout.addRow(self.state)
+        self.whole_frame.setEnabled(False)
         self.on_mode()
 
     def on_mode(self):
@@ -1035,10 +1119,30 @@ class FocusTab(QWidget):
             "AfMode": self.mode.currentIndex(),
             "AfRange": self.range.currentIndex(),
             "AfSpeed": self.speed.currentIndex(),
+            "AfMetering": 1 if self.window else 0,  # Windows / Auto
         }
+        if self.window:
+            controls["AfWindows"] = [self.window]
         if self.mode.currentIndex() == 0:
             controls["LensPosition"] = self.lens.value()
         picam2.set_controls(controls)
+
+    def set_window(self, window):
+        """Focus on a region (sensor coordinates, inside the current ScalerCrop) or the whole frame."""
+        self.window = window
+        self.whole_frame.setEnabled(window is not None)
+        if window:
+            self.window_label.setText(f"Metering: region {window[2]}x{window[3]} at ({window[0]}, {window[1]})")
+        else:
+            self.window_label.setText("Metering: whole frame")
+            set_status("Focusing on the whole frame")
+        self.apply()
+        if window:
+            # Continuous AF re-aims on its own; the other modes need a kick.
+            if self.mode.currentIndex() != 2:
+                self.do_trigger()
+        elif self.mode.currentIndex() == 1:
+            self.do_trigger()
 
     def do_trigger(self):
         if self.mode.currentIndex() == 2:
@@ -1700,7 +1804,12 @@ tabs.setElideMode(Qt.ElideNone)
 
 # Final setup
 recording = False
-_, scaler_crop, _ = picam2.camera_controls['ScalerCrop']
+# Current digital-zoom crop and the ScalerCrop frame it is expressed in (both from
+# the same configuration, so update_controls() can rescale between frames).
+# Start at 1.0x: the whole frame. (The control's "default" value is the crop
+# for whatever aspect ratio was last configured, e.g. a 4:3 cut, not the full frame.)
+_, crop_frame, _ = picam2.camera_controls['ScalerCrop']
+scaler_crop = crop_frame
 hdr_imgs = {"exposures": None}
 pic_tab.apply_settings()
 

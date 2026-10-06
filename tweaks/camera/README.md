@@ -42,9 +42,12 @@ crashed after a few shots (see below).
   recording in video mode. A **self-timer** (Off / 3 / 5 / 10 s, in the
   *Capture* tab) counts down on the button; pressing again cancels.
 - **Zoom** slider, mouse wheel over the preview, or `+` / `-` / `0` keys; drag
-  the preview to pan.
+  the preview to pan (a tap without dragging focuses instead).
 - **AF** triggers autofocus. The *Focus* tab sets Continuous (default), Auto
-  (trigger) or Manual with a lens-position slider.
+  (trigger) or Manual with a lens-position slider. **Tap the preview** to focus
+  on that spot: a box marks the region and the AF window follows it (in
+  Continuous mode it keeps tracking there; in Auto/Manual it triggers one
+  focus run). *Whole frame* in the Focus tab goes back to full-frame metering.
 - **Settings drawer** tabs: *Capture* (save folders, name, format, JPEG quality,
   resolution presets with megapixels, sensor mode, live-preview mode, HDR; in
   video mode: quality, frame rate, presets up to 4K, and a note of the sensor's
@@ -84,7 +87,12 @@ run in `.log.1`), so a crash from the menu entry can still be diagnosed.
 
 - Layout: full-window preview, one bottom bar, one collapsible drawer; the
   drawer is shown / hidden without resizing the window.
-- Autofocus tab and AF button (upstream deliberately hides the `Af*` controls).
+- Autofocus tab, AF button and tap-to-focus via `AfWindows` (upstream
+  deliberately hides the `Af*` controls).
+- Digital-zoom crop carried correctly across sensor modes: upstream kept the
+  old crop size when the ScalerCrop frame changed, leaving a crop with a
+  negative origin that libcamera silently clamped but that misplaced the pan
+  map (and would have misplaced the AF window).
 - Self-timer with countdown and cancel.
 - Save location, timestamped filenames, JPEG quality, photo and video resolution
   presets (video no longer capped at 1080p, which was a Pi 4 hardware-encoder
