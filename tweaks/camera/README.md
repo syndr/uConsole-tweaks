@@ -47,7 +47,7 @@ crashed after a few shots (see below).
 - **Settings drawer** tabs: *Capture* (save folders, name, format, JPEG quality,
   resolution, sensor mode, live-preview mode, HDR), *Exposure* (AE/AWB, EV,
   manual shutter / gain, colour gains), *Focus*, *Tuning* (saturation, contrast,
-  sharpness, brightness), *Zoom* (pan map), *Info* (live metadata), *Other*
+  sharpness, brightness), *Zoom* (pan map), *Info* (live metadata), *More*
   (every remaining camera control).
 - **HDR** takes a bracket of exposures and writes `_base`, `_mean`, `_debevec`,
   `_robertson` and `_mertens` versions.

@@ -238,19 +238,15 @@ def on_vid_button_clicked():
         else:
             output = FileOutput(path)
         picam2.start_encoder(encoder, output, vid_tab.quality)
-        rec_button.setText("Stop")
-        rec_button.setProperty("recording", True)
+        rec_button.setText("\u25a0 Stop")
         set_status(f"Recording {path}")
         recording = True
     else:
         picam2.stop_encoder()
-        rec_button.setText("Record")
-        rec_button.setProperty("recording", False)
+        rec_button.setText("\u25cf Record")
         set_status(f"Saved {status_label.text().removeprefix('Recording ')}")
         mode_group_enabled(True)
         recording = False
-    rec_button.style().unpolish(rec_button)
-    rec_button.style().polish(rec_button)
 
 
 def on_pic_button_clicked():
@@ -289,7 +285,7 @@ def on_mode_change():
     pic_tab.reset()
     capture_tab.stack.setCurrentIndex(1 if is_video else 0)
     if is_video:
-        rec_button.setText("Record")
+        rec_button.setText("\u25cf Record")
         switch_config("video")
     else:
         rec_button.setText("Shoot")
@@ -1471,10 +1467,9 @@ for b in (photo_button, video_button):
 photo_button.setChecked(True)
 rec_button = QPushButton("Shoot")
 rec_button.setMinimumWidth(110)
-rec_button.setStyleSheet(
-    "QPushButton { font-weight: bold; padding: 6px 14px; }"
-    "QPushButton[recording=\"true\"] { background: #a02020; color: white; }"
-)
+rec_font = rec_button.font()
+rec_font.setBold(True)
+rec_button.setFont(rec_font)
 rec_button.clicked.connect(on_rec_button_clicked)
 qpicamera2.done_signal.connect(capture_done)
 zoom_slider = QSlider(Qt.Horizontal)
@@ -1535,15 +1530,15 @@ if focus_tab is not None:
 tabs.addTab(scrolled(img_tab), "Tuning")
 tabs.addTab(scrolled(pan_tab), "Zoom")
 tabs.addTab(scrolled(info_tab), "Info")
-tabs.addTab(scrolled(other_tab), "Other")
+tabs.addTab(scrolled(other_tab), "More")
 tabs.setCurrentIndex(min(pref("ui/tab", 0), tabs.count() - 1))
 tabs.currentChanged.connect(lambda i: prefs.setValue("ui/tab", i))
-tabs.setFixedWidth(400)
-# Seven tabs have to fit in 400px: tighten the tab bar a little
+tabs.setFixedWidth(430)
+# Seven tabs have to fit across the drawer: tighten the tab bar a little
 tab_font = tabs.tabBar().font()
 tab_font.setPointSizeF(max(tab_font.pointSizeF() - 2, 8))
 tabs.tabBar().setFont(tab_font)
-tabs.setStyleSheet("QTabBar::tab { padding: 4px 6px; }")
+tabs.setElideMode(Qt.ElideNone)
 
 # Final setup
 recording = False
