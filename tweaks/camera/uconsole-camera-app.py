@@ -1324,7 +1324,12 @@ class picTab(QWidget):
 
     def on_filetype(self, text):
         prefs.setValue("photo/format", text)
-        self.jpeg_quality.setEnabled(text == "jpg")
+        # Only JPEG has a quality setting; hide the row (label + field) otherwise
+        is_jpg = text == "jpg"
+        self.jpeg_quality.setVisible(is_jpg)
+        label = self.layout.labelForField(self.jpeg_quality)
+        if label is not None:
+            label.setVisible(is_jpg)
 
     @property
     def sensor_mode(self):
