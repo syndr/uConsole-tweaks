@@ -39,7 +39,8 @@ crashed after a few shots (see below).
 ```
 
 - **Photo / Video** switch modes; **Shoot** takes a photo, or starts / stops
-  recording in video mode.
+  recording in video mode. A **self-timer** (Off / 3 / 5 / 10 s, in the
+  *Capture* tab) counts down on the button; pressing again cancels.
 - **Zoom** slider, mouse wheel over the preview, or `+` / `-` / `0` keys; drag
   the preview to pan.
 - **AF** triggers autofocus. The *Focus* tab sets Continuous (default), Auto
@@ -71,7 +72,7 @@ Photos are saved as `IMG_<timestamp>.<ext>` and videos as `VID_<timestamp>.<ext>
 *Capture* tab.
 
 Setup choices are remembered in `~/.config/uconsole-camera/uconsole-camera.conf`:
-folders, formats, JPEG quality, resolution, sensor mode, live-preview mode, video
+folders, formats, JPEG quality, self-timer, resolution, sensor mode, live-preview mode, video
 preset / quality / frame rate, AF mode, drawer and fullscreen state, last tab.
 Per-shot controls (exposure, gains, tuning sliders, zoom) start fresh each
 launch. *Reset all preferences* clears the file.
@@ -84,6 +85,7 @@ run in `.log.1`), so a crash from the menu entry can still be diagnosed.
 - Layout: full-window preview, one bottom bar, one collapsible drawer; the
   drawer is shown / hidden without resizing the window.
 - Autofocus tab and AF button (upstream deliberately hides the `Af*` controls).
+- Self-timer with countdown and cancel.
 - Save location, timestamped filenames, JPEG quality, photo and video resolution
   presets (video no longer capped at 1080p, which was a Pi 4 hardware-encoder
   limit), frame-rate ceiling note.

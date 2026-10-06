@@ -20,7 +20,7 @@ import threading
 from datetime import datetime
 
 import numpy as np
-from PyQt5.QtCore import QEvent, QSettings, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QSettings, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QKeySequence, QPainter, QPalette
 from PyQt5.QtWidgets import (
     QApplication,
@@ -235,10 +235,65 @@ def set_status(text):
 
 
 def on_rec_button_clicked():
+    # Self-timer: the first press starts a countdown; pressing again cancels it.
+    if self_timer.isActive():
+        cancel_timer()
+        return
+    delay = capture_tab.timer_seconds()
+    if delay and rec_button.isEnabled() and not recording:
+        start_timer(delay)
+        return
+    fire_shutter()
+
+
+def fire_shutter():
     if video_mode():
         on_vid_button_clicked()
     else:
         on_pic_button_clicked()
+
+
+self_timer = QTimer()
+self_timer.setInterval(1000)
+timer_left = 0
+
+
+def start_timer(seconds):
+    global timer_left
+    timer_left = seconds
+    mode_group_enabled(False)
+    show_timer()
+    self_timer.start()
+
+
+def timer_tick():
+    global timer_left
+    timer_left -= 1
+    if timer_left > 0:
+        show_timer()
+        return
+    self_timer.stop()
+    restore_shutter_text()
+    fire_shutter()
+
+
+def show_timer():
+    rec_button.setText(f"{timer_left}\u2026")
+    set_status(f"Self-timer: {timer_left} s  (press again to cancel)")
+
+
+def cancel_timer():
+    self_timer.stop()
+    restore_shutter_text()
+    mode_group_enabled(True)
+    set_status("Self-timer cancelled")
+
+
+def restore_shutter_text():
+    rec_button.setText("\u25cf Record" if video_mode() else "Shoot")
+
+
+self_timer.timeout.connect(timer_tick)
 
 
 def on_vid_button_clicked():
@@ -290,6 +345,8 @@ def video_mode():
 
 def on_mode_change():
     global recording
+    if self_timer.isActive():
+        cancel_timer()
     if recording:
         print("Not switching, recording in progress, so back to video")
         video_button.setChecked(True)
@@ -1437,6 +1494,12 @@ class CaptureTab(QWidget):
         self.video_dir_edit.editingFinished.connect(lambda: prefs.setValue("paths/videos", self.video_dir_edit.text()))
         form.addRow("Photos to", self.dir_row(self.photo_dir_edit, "paths/photos"))
         form.addRow("Videos to", self.dir_row(self.video_dir_edit, "paths/videos"))
+        self.timer = QComboBox()
+        self.timer_values = [0, 3, 5, 10]
+        self.timer.addItems(["Off"] + [f"{v} s" for v in self.timer_values[1:]])
+        self.timer.setCurrentIndex(min(pref("capture/timer", 0), len(self.timer_values) - 1))
+        self.timer.currentIndexChanged.connect(lambda i: prefs.setValue("capture/timer", i))
+        form.addRow("Self-timer", self.timer)
         self.reset_button = QPushButton("Reset all preferences")
         self.reset_button.clicked.connect(self.reset_prefs)
         form.addRow(self.reset_button)
@@ -1472,6 +1535,9 @@ class CaptureTab(QWidget):
         if chosen:
             edit.setText(chosen)
             prefs.setValue(key, chosen)
+
+    def timer_seconds(self):
+        return self.timer_values[self.timer.currentIndex()]
 
     def photo_dir(self):
         return os.path.expanduser(self.photo_dir_edit.text().strip() or default_pictures_dir())
