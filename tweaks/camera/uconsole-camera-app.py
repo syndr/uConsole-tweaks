@@ -242,8 +242,19 @@ def update_controls():
 
 # --- Capture ------------------------------------------------------------------
 
-def set_status(text):
+status_timer = QTimer()
+status_timer.setSingleShot(True)
+
+
+def set_status(text, clear_after_ms=None):
+    """Show text in the bar; with clear_after_ms it disappears after that long."""
+    status_timer.stop()
     status_label.setText(text)
+    if clear_after_ms:
+        status_timer.start(clear_after_ms)
+
+
+status_timer.timeout.connect(lambda: status_label.setText(""))
 
 
 def on_rec_button_clicked():
@@ -861,7 +872,7 @@ def focus_at(widget, pos):
     wy = min(max(sy - wh // 2, cy), cy + ch - wh)
     focus_tab.set_window((wx, wy, ww, wh))
     show_focus_box(nx, ny, ww / cw, wh / ch)
-    set_status("Focusing on the tapped region  (Focus tab: Whole frame to reset)")
+    set_status("Focusing on the tapped region\u2026")
 
 
 focus_box_timer = QTimer()
@@ -1158,7 +1169,7 @@ class FocusTab(QWidget):
             self.window_label.setText(f"Metering: region {window[2]}x{window[3]} at ({window[0]}, {window[1]})")
         else:
             self.window_label.setText("Metering: whole frame")
-            set_status("Focusing on the whole frame")
+            set_status("Focusing on the whole frame\u2026")
         self.apply()
         if window:
             # Continuous AF re-aims on its own; the other modes need a kick.
@@ -1183,6 +1194,9 @@ class FocusTab(QWidget):
             if pos is not None:
                 text += f"   lens {pos:.2f}"
             self.state.setText(text)
+            # Resolve a "Focusing..." note in the bar once the AF run ends
+            if status_label.text().startswith("Focusing") and s in (2, 3):
+                set_status("Focused" if s == 2 else "Focus failed", 2500)
 
 
 class IMGTab(QWidget):
