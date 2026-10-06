@@ -34,7 +34,7 @@ crashed after a few shots (see below).
 |                                              |  settings drawer   |
 |                                              |  (Tab / ⚙ hides)   |
 +----------------------------------------------+--------------------+
-| Photo Video [Shoot] AF  Zoom ----o-- 1.0x   status           [⚙] |
+| Photo Video  AF  Zoom ---o-- 1.0x  status      [   Shoot   ]  [⚙] |
 +-------------------------------------------------------------------+
 ```
 
