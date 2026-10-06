@@ -41,7 +41,8 @@ crashed after a few shots (see below).
 - **Photo / Video** switch modes; **Shoot** takes a photo, or starts / stops
   recording in video mode. A **self-timer** (Off / 3 / 5 / 10 s, in the
   *Capture* tab) counts down on the button; pressing again cancels.
-- **Zoom** slider, mouse wheel over the preview, or `+` / `-` / `0` keys; drag
+- **Zoom** slider, mouse wheel over the preview (zooms about the cursor), or
+  `+` / `-` / `0` keys; drag
   the preview to pan (a tap without dragging focuses instead).
 - **AF** triggers autofocus. The *Focus* tab sets Continuous (default), Auto
   (trigger) or Manual with a lens-position slider. **Tap the preview** to focus

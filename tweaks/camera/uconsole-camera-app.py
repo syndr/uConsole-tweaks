@@ -774,6 +774,18 @@ class panZoomDisplay(QWidget):
         self.zoom_level += zoom_dir * self.zoom_step
         self.setZoom()
 
+    def zoom_about(self, level, anchor):
+        """Zoom to `level` keeping the sensor point `anchor` = (sx, sy, (nx, ny)) under the cursor."""
+        level = min(max(level, 1.0), self.max_zoom)
+        if level == self.zoom_level_:
+            return
+        self.zoom_level_ = level
+        _, full_img, _ = picam2.camera_controls['ScalerCrop']
+        w = int(full_img[2] / level)
+        h = int(full_img[3] / level)
+        sx, sy, (nx, ny) = anchor
+        self.set_crop([int(sx - nx * w), int(sy - ny * h), w, h])
+
 
 class PreviewMouse(QWidget):
     """Event filter on the preview: wheel zooms, drag pans, a tap focuses there."""
@@ -789,7 +801,15 @@ class PreviewMouse(QWidget):
     def eventFilter(self, obj, event):
         t = event.type()
         if t == QEvent.Wheel:
-            pan_tab.pan_display.wheelEvent(event)
+            # Zoom about the point under the cursor; fall back to centre zoom off the image
+            display = pan_tab.pan_display
+            anchor = preview_to_sensor(obj, event.position().toPoint() if hasattr(event, "position") else event.pos())
+            step = np.sign(event.angleDelta().y()) * display.zoom_step * 5
+            if anchor is None:
+                display.zoom_level += step
+                display.setZoom()
+            else:
+                display.zoom_about(display.zoom_level + step, anchor)
             return True
         if t == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
             self.last = self.press = event.pos()
