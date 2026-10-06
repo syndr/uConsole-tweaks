@@ -149,6 +149,21 @@ while lores_size[0] > 1600:
 # request has been recycled crashed the app ('NoneType' object has no attribute
 # 'buffers'). Two buffers let the widget keep its frame alive.
 still_kwargs = {"lores": {"size": lores_size}, "display": "lores", "encode": "lores", "buffer_count": 2}
+
+
+def still_config(main_size, raw=None):
+    """Still configuration with the preview (lores) stream clamped to the main size.
+
+    Picamera2 rejects a lores stream larger than main, which happened upstream
+    whenever a small custom resolution was chosen.
+    """
+    lores = (min(lores_size[0], main_size[0]) & ~1, min(lores_size[1], main_size[1]) & ~1)
+    kwargs = dict(still_kwargs, lores={"size": lores})
+    if raw is not None:
+        kwargs["raw"] = raw
+    return picam2.create_still_configuration(main={"size": tuple(main_size)}, **kwargs)
+
+
 picam2.still_configuration = picam2.create_still_configuration(**still_kwargs)
 picam2.configure("still")
 _ = picam2.sensor_modes
@@ -720,6 +735,54 @@ class PreviewMouse(QWidget):
 
 # --- Settings tabs (upstream, compacted) -------------------------------------------
 
+STANDARD_SIZES = [(3840, 2160), (1920, 1080), (1280, 720)]
+
+
+def resolution_presets(max_height=None):
+    """Sensor-mode sizes plus common sizes that fit the sensor, largest first."""
+    sizes = {tuple(m["size"]) for m in picam2.sensor_modes}
+    sw, sh = picam2.sensor_resolution
+    sizes.update(size for size in STANDARD_SIZES if size[0] <= sw and size[1] <= sh)
+    if max_height:
+        sizes = {size for size in sizes if size[1] <= max_height}
+    return sorted(sizes, key=lambda size: size[0] * size[1], reverse=True)
+
+
+def megapixels(size):
+    return f"{size[0] * size[1] / 1e6:.1f} MP"
+
+
+def sensor_mode_for(size):
+    """The sensor mode Picamera2 will pick for an output size: the smallest that covers it."""
+    fits = [m for m in picam2.sensor_modes if m["size"][0] >= size[0] and m["size"][1] >= size[1]]
+    pool = fits or picam2.sensor_modes
+    return min(pool, key=lambda m: m["size"][0] * m["size"][1]) if fits else max(pool, key=lambda m: m["size"][0] * m["size"][1])
+
+
+class PresetPicker:
+    """Keeps a preset combo and a pair of width/height spinboxes in step."""
+
+    def __init__(self, combo, w_box, h_box, presets, label):
+        self.combo, self.w_box, self.h_box, self.presets = combo, w_box, h_box, presets
+        combo.addItems([label(size) for size in presets] + ["Custom"])
+        combo.currentIndexChanged.connect(self.on_combo)
+        w_box.valueChanged.connect(self.sync)
+        h_box.valueChanged.connect(self.sync)
+        self.sync()
+
+    def on_combo(self, i):
+        if i < len(self.presets):
+            w, h = self.presets[i]
+            self.w_box.setValue(w)
+            self.h_box.setValue(h)
+
+    def sync(self):
+        size = (self.w_box.value(), self.h_box.value())
+        index = self.presets.index(size) if size in self.presets else len(self.presets)
+        self.combo.blockSignals(True)
+        self.combo.setCurrentIndex(index)
+        self.combo.blockSignals(False)
+
 class AECTab(QWidget):
     def __init__(self, is_mono: bool):
         super().__init__()
@@ -1032,8 +1095,6 @@ class otherTab(QWidget):
 
 
 class vidTab(QWidget):
-    PRESETS = [("1080p", (1920, 1080)), ("720p", (1280, 720)), ("Custom", None)]
-
     def __init__(self):
         super().__init__()
         self.layout = compact_form()
@@ -1055,12 +1116,14 @@ class vidTab(QWidget):
         self.framerate.valueChanged.connect(self.vid_update)
         self.actual_framerate = QLabel()
         self.preset = QComboBox()
-        self.preset.addItems([p[0] for p in self.PRESETS])
         self.resolution_w = QSpinBox()
         self.resolution_w.setMaximum(picam2.sensor_resolution[0])
         self.resolution_h = QSpinBox()
-        # Max height is 1080 for the encoder to still work
-        self.resolution_h.setMaximum(min(picam2.sensor_resolution[1], 1080))
+        # Upstream capped video height at 1080 for the Pi 4 hardware encoder; the
+        # Pi 5 encodes in software, so anything the sensor can do is allowed.
+        self.resolution_h.setMaximum(picam2.sensor_resolution[1])
+        self.note = QLabel()
+        self.note.setWordWrap(True)
         self.raw_format = QComboBox()
         self.raw_format.addItem("Default")
         self.raw_format.addItems([f'{x["format"].format} {x["size"]}, {x["fps"]:.0f}fps' for x in picam2.sensor_modes])
@@ -1082,27 +1145,39 @@ class vidTab(QWidget):
         self.layout.addRow(self.actual_framerate)
         self.layout.addRow("Preset", self.preset)
         self.layout.addRow("Resolution", resolution)
+        self.layout.addRow(self.note)
         self.layout.addRow("Sensor mode", self.raw_format)
         self.layout.addRow(self.apply_button)
 
         self.frametime_ = None
-        self.set_resolution(pref("video/width", 1920), pref("video/height", 1080))
-        self.preset.currentIndexChanged.connect(self.on_preset)
+        self.resolution_w.setValue(pref("video/width", 1920))
+        self.resolution_h.setValue(pref("video/height", 1080))
+        self.picker = PresetPicker(self.preset, self.resolution_w, self.resolution_h, resolution_presets(), self.label)
+        for widget in (self.resolution_w, self.resolution_h, self.framerate):
+            widget.valueChanged.connect(self.update_note)
+        self.update_note()
         self.reset()
 
-    def on_preset(self, i):
-        size = self.PRESETS[i][1]
-        if size:
-            self.resolution_w.setValue(size[0])
-            self.resolution_h.setValue(size[1])
+    @staticmethod
+    def label(size):
+        names = {(3840, 2160): "4K", (1920, 1080): "1080p", (1280, 720): "720p"}
+        text = f"{names.get(size, '')} {size[0]}x{size[1]}".strip()
+        fps = sensor_mode_for(size)["fps"]
+        if fps < 30:
+            text += f" (\u2264{fps:.0f} fps)"
+        return text
 
-    def set_resolution(self, w, h):
-        self.resolution_w.setValue(w)
-        self.resolution_h.setValue(h)
-        for i, (_, size) in enumerate(self.PRESETS):
-            if size == (w, h) or size is None:
-                self.preset.setCurrentIndex(i)
-                break
+    def update_note(self):
+        """Explain the frame-rate ceiling for the chosen size (sensor mode + software encoder)."""
+        size = (self.resolution_w.value(), self.resolution_h.value())
+        mode = sensor_mode_for(size)
+        fps = mode["fps"]
+        text = f"Sensor mode {mode['size'][0]}x{mode['size'][1]}: up to {fps:.0f} fps at this size."
+        if self.framerate.value() > fps + 0.5:
+            text += f" The {self.framerate.value()} fps setting will be limited to about {fps:.0f} fps."
+        if size[1] > 1080:
+            text += " H.264 is software-encoded on the Pi 5; expect high CPU load above 1080p."
+        self.note.setText(text)
 
     @property
     def quality(self):
@@ -1170,6 +1245,7 @@ class picTab(QWidget):
         self.jpeg_quality.setRange(50, 100)
         self.jpeg_quality.setValue(pref("photo/jpeg_quality", 93))
         self.jpeg_quality.valueChanged.connect(lambda v: prefs.setValue("photo/jpeg_quality", v))
+        self.preset = QComboBox()
         self.resolution_w = QSpinBox()
         self.resolution_w.setMaximum(picam2.sensor_resolution[0])
         self.resolution_w.valueChanged.connect(lambda: self.apply_button.setEnabled(True))
@@ -1178,7 +1254,7 @@ class picTab(QWidget):
         self.resolution_h.valueChanged.connect(lambda: self.apply_button.setEnabled(True))
         self.raw_format = QComboBox()
         self.raw_format.addItem("Default")
-        self.raw_format.addItems([f'{x["format"].format} {x["size"]}' for x in picam2.sensor_modes])
+        self.raw_format.addItems([f'{x["format"].format} {x["size"]} ({megapixels(x["size"])})' for x in picam2.sensor_modes])
         self.raw_format.setCurrentIndex(pref("photo/sensor_mode", 0))
         self.raw_format.currentIndexChanged.connect(self.update_options)
         self.preview_format = QComboBox()
@@ -1220,11 +1296,16 @@ class picTab(QWidget):
         # Remembered resolution wins over the sensor-mode default
         self.resolution_w.setValue(pref("photo/width", picam2.sensor_resolution[0]))
         self.resolution_h.setValue(pref("photo/height", picam2.sensor_resolution[1]))
+        self.picker = PresetPicker(
+            self.preset, self.resolution_w, self.resolution_h, resolution_presets(),
+            lambda size: f"{size[0]}x{size[1]} ({megapixels(size)})",
+        )
         self.reset()
 
         self.layout.addRow("Name", self.filename)
         self.layout.addRow("Format", self.filetype)
         self.layout.addRow("JPEG quality", self.jpeg_quality)
+        self.layout.addRow("Preset", self.preset)
         self.layout.addRow("Resolution", resolution)
         self.layout.addRow("Sensor mode", self.raw_format)
         self.layout.addRow("Live preview mode", self.preview_check)
@@ -1275,8 +1356,8 @@ class picTab(QWidget):
     def reset(self):
         if cv_present:
             self.hdr_gamma.setValue(2.2)
-        picam2.still_configuration = picam2.create_still_configuration(
-            main={"size": (self.resolution_w.value(), self.resolution_h.value())}, **still_kwargs, raw=self.sensor_mode
+        picam2.still_configuration = still_config(
+            (self.resolution_w.value(), self.resolution_h.value()), raw=self.sensor_mode
         )
 
     def update_options(self):
@@ -1311,8 +1392,8 @@ class picTab(QWidget):
         prefs.setValue("photo/sensor_mode", self.raw_format.currentIndex())
         prefs.setValue("photo/preview_mode", self.preview_check.isChecked())
 
-        picam2.still_configuration = picam2.create_still_configuration(
-            main={"size": (self.resolution_w.value(), self.resolution_h.value())}, **still_kwargs, raw=self.sensor_mode
+        picam2.still_configuration = still_config(
+            (self.resolution_w.value(), self.resolution_h.value()), raw=self.sensor_mode
         )
         preview_w = max(qpicamera2.width(), 640)
         picam2.preview_configuration = picam2.create_preview_configuration(

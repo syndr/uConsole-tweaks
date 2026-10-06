@@ -45,12 +45,20 @@ crashed after a few shots (see below).
 - **AF** triggers autofocus. The *Focus* tab sets Continuous (default), Auto
   (trigger) or Manual with a lens-position slider.
 - **Settings drawer** tabs: *Capture* (save folders, name, format, JPEG quality,
-  resolution, sensor mode, live-preview mode, HDR), *Exposure* (AE/AWB, EV,
+  resolution presets with megapixels, sensor mode, live-preview mode, HDR; in
+  video mode: quality, frame rate, presets up to 4K, and a note of the sensor's
+  frame-rate ceiling for the chosen size), *Exposure* (AE/AWB, EV,
   manual shutter / gain, colour gains), *Focus*, *Tuning* (saturation, contrast,
   sharpness, brightness), *Zoom* (pan map), *Info* (live metadata), *More*
   (every remaining camera control).
 - **HDR** takes a bracket of exposures and writes `_base`, `_mean`, `_debevec`,
   `_robertson` and `_mertens` versions.
+
+Video is H.264 encoded in software on the Pi 5 (there is no hardware encoder).
+With a Camera Module 3, 1080p records at a real 30 fps; 4K (3840x2160) needs the
+sensor's full-resolution mode, which tops out at about 14 fps, and loads the
+CPU heavily. The presets and the note under *Resolution* are computed from the
+detected sensor's modes, so they adapt to other cameras.
 
 Keys: `Space` shoot / record, `Tab` toggle drawer, `F` autofocus, `+` `-` `0`
 zoom, `F11` fullscreen, `Esc` / `Q` quit.
@@ -76,7 +84,11 @@ run in `.log.1`), so a crash from the menu entry can still be diagnosed.
 - Layout: full-window preview, one bottom bar, one collapsible drawer; the
   drawer is shown / hidden without resizing the window.
 - Autofocus tab and AF button (upstream deliberately hides the `Af*` controls).
-- Save location, timestamped filenames, JPEG quality, video resolution presets.
+- Save location, timestamped filenames, JPEG quality, photo and video resolution
+  presets (video no longer capped at 1080p, which was a Pi 4 hardware-encoder
+  limit), frame-rate ceiling note.
+- Preview (lores) stream clamped to the chosen photo size: upstream raised
+  `lores stream dimensions may not exceed main stream` for small custom sizes.
 - Preferences persisted with `QSettings`.
 - Keyboard shortcuts; wheel-zoom and drag-pan on the preview.
 - Crash fix: upstream configured stills with `buffer_count=1`, so the Wayland GL
@@ -91,7 +103,9 @@ run in `.log.1`), so a crash from the menu entry can still be diagnosed.
 
 - `python3-picamera2`, `python3-pyqt5`, `python3-opengl`, and `python3-opencv`
   for HDR (all declared as `Recommends`, so `apt` pulls them in by default).
-- A camera that libcamera detects. Check with `rpicam-hello --list-cameras`.
+- A camera that libcamera detects (any Raspberry Pi camera module or third-party
+  CSI sensor with a Pi libcamera driver; not USB webcams). Check with
+  `rpicam-hello --list-cameras`.
 - The launcher pins `QT_QPA_PLATFORM` to `wayland` (or `xcb` outside Wayland):
   the GL preview fails at startup with `EGL_BAD_ALLOC` when the variable holds a
   fallback list such as `wayland;xcb`, which many Wayland sessions export.
