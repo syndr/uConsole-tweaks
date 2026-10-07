@@ -41,6 +41,10 @@ crashed after a few shots (see below).
 - **Photo / Video** switch modes; **Shoot** takes a photo, or starts / stops
   recording in video mode. A **self-timer** (Off / 3 / 5 / 10 s, in the
   *Capture* tab) counts down on the button; pressing again cancels.
+- **Live preview mode** (Capture tab, on by default) runs the preview in a fast
+  sensor mode and switches to the full-resolution mode for each shot (about
+  half a second); untick it to stay in the still configuration for instant
+  capture at a 14 fps preview.
 - **Clipboard** on the bar also copies each captured photo (jpg / png / bmp /
   gif) to the clipboard as a PNG, downscaled to the long edge chosen under
   *Clipboard image* in the *Capture* tab (default 1920 px; full size is an
@@ -118,6 +122,10 @@ run in `.log.1`), so a crash from the menu entry can still be diagnosed.
   `AttributeError: 'NoneType' object has no attribute 'buffers'` (reproducibly
   on the third shot). The fork uses two buffers, drops the preview's frame before
   every reconfigure, and guards the repaint.
+- Live-preview mode defaults to the smallest sensor mode with the capture's
+  field of view ("Match capture framing"), so the preview shows what the photo
+  will contain; left to Picamera2 it picked a centre-crop mode and upstream
+  warned about the mismatch instead.
 - Zoomed photos are actually zoomed: after the preview-to-still switch the
   first frames still carry the full-frame crop, so the capture waits for a frame
   whose `ScalerCrop` matches the zoom (upstream saved the first frame).

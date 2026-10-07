@@ -1603,9 +1603,16 @@ class picTab(QWidget):
 
     @property
     def preview_mode(self):
+        # "Match capture framing": the smallest sensor mode that covers the same
+        # field of view as the capture mode. Left to Picamera2, a 1280x720
+        # preview lands on the 1536x864 mode, which on the IMX708 is a centre
+        # crop - the preview then shows less than the photo will.
         configs = [self.sensor_mode]
         for mode in self.preview_modes:
             configs.append({"size": mode["size"], "format": mode["format"].format})
+        if self.preview_format.currentIndex() == 0 and self.preview_modes:
+            smallest = min(self.preview_modes, key=lambda m: m["size"][0] * m["size"][1])
+            return {"size": smallest["size"], "format": smallest["format"].format}
         return configs[self.preview_format.currentIndex()]
 
     @property
@@ -1643,7 +1650,7 @@ class picTab(QWidget):
         else:
             crop_limits = (0, 0, *picam2.sensor_resolution)
         self.preview_format.clear()
-        self.preview_format.addItem("Same as capture")
+        self.preview_format.addItem("Match capture framing")
         self.preview_modes = []
         for mode in picam2.sensor_modes:
             if mode["crop_limits"] == crop_limits:
