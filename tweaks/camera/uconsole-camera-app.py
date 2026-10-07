@@ -252,15 +252,26 @@ MIME_TYPES = {"jpg": "image/jpeg", "png": "image/png", "bmp": "image/bmp", "gif"
 
 
 def copy_to_clipboard(path):
-    """Put a saved photo on the clipboard. Prefers wl-copy, which keeps serving the
-    data after this app exits; falls back to Qt's clipboard."""
+    """Put a saved photo on the clipboard.
+
+    Prefers a clipboard tool that keeps serving the data after this app exits:
+    wl-copy on Wayland, xclip on X11. Falls back to Qt's clipboard, which on
+    both systems only lasts as long as the app (or until a clipboard manager
+    picks it up).
+    """
     ext = path.rsplit(".", 1)[-1].lower()
     mime = MIME_TYPES.get(ext)
     if mime is None:
         return "not copied (clipboard supports jpg/png/bmp/gif)"
     if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-copy"):
+        tool = ["wl-copy", "--type", mime]
+    elif os.environ.get("DISPLAY") and shutil.which("xclip"):
+        tool = ["xclip", "-selection", "clipboard", "-t", mime, "-i"]
+    else:
+        tool = None
+    if tool:
         with open(path, "rb") as f:
-            subprocess.Popen(["wl-copy", "--type", mime], stdin=f, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(tool, stdin=f, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return "copied to clipboard"
     image = QImage(path)
     if image.isNull():

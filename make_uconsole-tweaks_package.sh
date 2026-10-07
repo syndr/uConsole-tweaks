@@ -64,6 +64,7 @@ Maintainer: syndr <syndr@ultroncore.net>
 Architecture: all
 Depends: python3, python3-evdev, keyd
 Recommends: python3-picamera2, python3-pyqt5, python3-opengl, python3-opencv
+Suggests: wl-clipboard, xclip
 Description: Small standalone tweaks for the ClockworkPi uConsole.
  Ships:
    * zmk-cursor-scroll - hold the gamepad Select key to make the trackball

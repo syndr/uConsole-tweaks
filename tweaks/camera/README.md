@@ -42,8 +42,9 @@ crashed after a few shots (see below).
   recording in video mode. A **self-timer** (Off / 3 / 5 / 10 s, in the
   *Capture* tab) counts down on the button; pressing again cancels.
 - **Clipboard** on the bar also copies each captured photo (jpg / png / bmp /
-  gif) to the clipboard, via `wl-copy` when available so it survives closing
-  the app, otherwise Qt's clipboard.
+  gif) to the clipboard: via `wl-copy` on Wayland or `xclip` on X11 when
+  installed, so the image survives closing the app; otherwise Qt's clipboard,
+  which lasts only while the app runs (unless a clipboard manager keeps it).
 - **EV** on the bar is exposure compensation (greyed out when auto-exposure is
   off); the **resolution** combo picks a preset for the current mode
   (megapixels for photos, 4K / 1080p / 720p for video).
