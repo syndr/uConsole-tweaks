@@ -385,13 +385,21 @@ def on_pic_button_clicked():
     hdr_in_progress = pic_tab.hdr.isChecked() and hdr_imgs["exposures"] is not None
     if not rec_button.isEnabled() and not hdr_in_progress:
         return
+    global crop_retries
     if rec_button.isEnabled():
         rec_button.setEnabled(False)
         mode_group_enabled(False)
         set_status("Capturing...")
+        crop_retries = 0
         if pic_tab.preview_check.isChecked():
             switch_config("still")
     picam2.capture_request(signal_function=qpicamera2.signal_done)
+
+
+def crop_settled(metadata):
+    """True once the frame carries the digital-zoom crop we asked for (within alignment slack)."""
+    applied = metadata.get("ScalerCrop")
+    return applied is not None and all(abs(a - b) <= 8 for a, b in zip(applied, scaler_crop))
 
 
 def mode_group_enabled(enabled):
@@ -429,8 +437,17 @@ def on_mode_change():
 
 def capture_done(job):
     # Here's the request we captured. But we must always release it when we're done with it!
+    global crop_retries
     if not pic_tab.hdr.isChecked():
         request = picam2.wait(job)
+        # After a preview->still switch the first frames still have the default
+        # (full) crop: the ScalerCrop control takes a few frames to apply. Wait
+        # for one that matches so a zoomed photo is actually zoomed.
+        if not crop_settled(request.get_metadata()) and crop_retries < 10:
+            crop_retries += 1
+            request.release()
+            picam2.capture_request(signal_function=qpicamera2.signal_done)
+            return
         ext = pic_tab.filetype.currentText()
         if ext == "raw":
             path = output_path("IMG", "dng", pic_tab.filename.text())
@@ -1909,6 +1926,7 @@ tabs.setElideMode(Qt.ElideNone)
 
 # Final setup
 recording = False
+crop_retries = 0
 # Current digital-zoom crop and the ScalerCrop frame it is expressed in (both from
 # the same configuration, so update_controls() can rescale between frames).
 # Start at 1.0x: the whole frame. (The control's "default" value is the crop

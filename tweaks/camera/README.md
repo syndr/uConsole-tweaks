@@ -118,6 +118,9 @@ run in `.log.1`), so a crash from the menu entry can still be diagnosed.
   `AttributeError: 'NoneType' object has no attribute 'buffers'` (reproducibly
   on the third shot). The fork uses two buffers, drops the preview's frame before
   every reconfigure, and guards the repaint.
+- Zoomed photos are actually zoomed: after the preview-to-still switch the
+  first frames still carry the full-frame crop, so the capture waits for a frame
+  whose `ScalerCrop` matches the zoom (upstream saved the first frame).
 - Info-tab metadata formatting only runs while the tab is visible.
 
 ## Requirements
