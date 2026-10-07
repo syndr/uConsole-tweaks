@@ -1,0 +1,28 @@
+#!/bin/sh
+# Launch uConsole Camera (Picamera2 app sized for the uConsole's 1280x720 screen).
+#
+# The GL preview only initialises when Qt is given a single platform. With the
+# "wayland;xcb" fallback list that many Wayland sessions export it dies at
+# startup with EGL_BAD_ALLOC, so pin the platform to match the session.
+#
+# Output goes to ~/.cache/uconsole-camera.log (previous run kept as .log.1) so
+# a crash from the menu entry can still be diagnosed; on a terminal it is
+# shown as well.
+
+APP=/usr/local/share/uconsole-tweaks/camera/uconsole-camera-app.py
+LOG="${XDG_CACHE_HOME:-$HOME/.cache}/uconsole-camera.log"
+
+if [ -n "$WAYLAND_DISPLAY" ]; then
+    export QT_QPA_PLATFORM=wayland
+else
+    export QT_QPA_PLATFORM=xcb
+fi
+
+mkdir -p "$(dirname "$LOG")"
+[ -f "$LOG" ] && mv -f "$LOG" "$LOG.1"
+
+if [ -t 2 ]; then
+    python3 -u "$APP" "$@" 2>&1 | tee "$LOG"
+else
+    exec python3 -u "$APP" "$@" >"$LOG" 2>&1
+fi

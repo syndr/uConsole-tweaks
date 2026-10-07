@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=uConsole Camera
+GenericName=Camera
+Comment=Full-featured camera app for the CSI camera (Picamera2)
+Exec=/usr/local/bin/uconsole-camera
+Icon=camera-photo
+Terminal=false
+Categories=Graphics;Photography;
+Keywords=camera;photo;video;picamera2;libcamera;
