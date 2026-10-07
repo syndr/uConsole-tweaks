@@ -9,7 +9,7 @@ jobs:
   deb:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install build and check tools
         run: sudo apt-get update -q && sudo apt-get install -y -q desktop-file-utils
@@ -38,7 +38,7 @@ jobs:
           dpkg-deb --contents uconsole-tweaks.deb
           lintian --version >/dev/null 2>&1 && lintian --no-tag-display-limit uconsole-tweaks.deb || true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: uconsole-tweaks.deb
           path: uconsole-tweaks.deb
