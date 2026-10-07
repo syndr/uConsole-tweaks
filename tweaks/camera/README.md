@@ -42,9 +42,12 @@ crashed after a few shots (see below).
   recording in video mode. A **self-timer** (Off / 3 / 5 / 10 s, in the
   *Capture* tab) counts down on the button; pressing again cancels.
 - **Clipboard** on the bar also copies each captured photo (jpg / png / bmp /
-  gif) to the clipboard: via `wl-copy` on Wayland or `xclip` on X11 when
-  installed, so the image survives closing the app; otherwise Qt's clipboard,
-  which lasts only while the app runs (unless a clipboard manager keeps it).
+  gif) to the clipboard as a PNG, downscaled to the long edge chosen under
+  *Clipboard image* in the *Capture* tab (default 1920 px; full size is an
+  option, but clipboard managers such as CopyQ silently drop images of 15 MB).
+  It goes through `wl-copy` on Wayland or `xclip` on X11 when installed, so
+  the image survives closing the app; otherwise Qt's clipboard, which lasts
+  only while the app runs (unless a clipboard manager keeps it).
 - **EV** on the bar is exposure compensation (greyed out when auto-exposure is
   off); the **resolution** combo picks a preset for the current mode
   (megapixels for photos, 4K / 1080p / 720p for video).
@@ -83,7 +86,7 @@ Photos are saved as `IMG_<timestamp>.<ext>` and videos as `VID_<timestamp>.<ext>
 *Capture* tab.
 
 Setup choices are remembered in `~/.config/uconsole-camera/uconsole-camera.conf`:
-folders, formats, JPEG quality, self-timer, clipboard copy, AE metering, resolution, sensor mode, live-preview mode, video
+folders, formats, JPEG quality, self-timer, clipboard copy and size, AE metering, resolution, sensor mode, live-preview mode, video
 preset / quality / frame rate, AF mode, drawer and fullscreen state, last tab.
 Per-shot controls (exposure, gains, tuning sliders, zoom) start fresh each
 launch. *Reset all preferences* clears the file.

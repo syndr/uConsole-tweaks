@@ -22,7 +22,7 @@ import threading
 from datetime import datetime
 
 import numpy as np
-from PyQt5.QtCore import QEvent, QSettings, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QBuffer, QEvent, QIODevice, QSettings, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QImage, QKeySequence, QPainter, QPalette
 from PyQt5.QtWidgets import (
     QApplication,
@@ -248,36 +248,39 @@ status_timer = QTimer()
 status_timer.setSingleShot(True)
 
 
-MIME_TYPES = {"jpg": "image/jpeg", "png": "image/png", "bmp": "image/bmp", "gif": "image/gif"}
+CLIPBOARD_SIZES = [("Full size", 0), ("1920 px", 1920), ("1280 px", 1280)]
 
 
 def copy_to_clipboard(path):
-    """Put a saved photo on the clipboard.
+    """Put a saved photo on the clipboard as PNG, downscaled to the chosen long edge.
 
-    Prefers a clipboard tool that keeps serving the data after this app exits:
-    wl-copy on Wayland, xclip on X11. Falls back to Qt's clipboard, which on
-    both systems only lasts as long as the app (or until a clipboard manager
-    picks it up).
+    Clipboards are not built for 15 MB images: CopyQ silently drops items above
+    its size limit, and many apps only paste PNG. Uses a tool that keeps serving
+    the data after this app exits (wl-copy on Wayland, xclip on X11), else Qt's
+    clipboard, which lasts as long as the app.
     """
-    ext = path.rsplit(".", 1)[-1].lower()
-    mime = MIME_TYPES.get(ext)
-    if mime is None:
+    if path.rsplit(".", 1)[-1].lower() not in ("jpg", "png", "bmp", "gif"):
         return "not copied (clipboard supports jpg/png/bmp/gif)"
-    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-copy"):
-        tool = ["wl-copy", "--type", mime]
-    elif os.environ.get("DISPLAY") and shutil.which("xclip"):
-        tool = ["xclip", "-selection", "clipboard", "-t", mime, "-i"]
-    else:
-        tool = None
-    if tool:
-        with open(path, "rb") as f:
-            subprocess.Popen(tool, stdin=f, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return "copied to clipboard"
     image = QImage(path)
     if image.isNull():
         return "not copied (could not load image)"
-    app.clipboard().setImage(image)
-    return "copied to clipboard"
+    max_edge = capture_tab.clipboard_max_edge()
+    if max_edge and max(image.width(), image.height()) > max_edge:
+        image = image.scaled(max_edge, max_edge, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-copy"):
+        tool = ["wl-copy", "--type", "image/png"]
+    elif os.environ.get("DISPLAY") and shutil.which("xclip"):
+        tool = ["xclip", "-selection", "clipboard", "-t", "image/png", "-i"]
+    else:
+        app.clipboard().setImage(image)
+        return f"copied to clipboard ({image.width()}x{image.height()})"
+    buf = QBuffer()
+    buf.open(QIODevice.WriteOnly)
+    image.save(buf, "PNG")
+    proc = subprocess.Popen(tool, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    proc.stdin.write(bytes(buf.data()))
+    proc.stdin.close()
+    return f"copied to clipboard ({image.width()}x{image.height()} PNG)"
 
 
 def set_status(text, clear_after_ms=None):
@@ -1686,6 +1689,12 @@ class CaptureTab(QWidget):
         self.timer.setCurrentIndex(min(pref("capture/timer", 0), len(self.timer_values) - 1))
         self.timer.currentIndexChanged.connect(lambda i: prefs.setValue("capture/timer", i))
         form.addRow("Self-timer", self.timer)
+        self.clip_size = QComboBox()
+        self.clip_size.addItems([name for name, _ in CLIPBOARD_SIZES])
+        self.clip_size.setCurrentIndex(min(pref("photo/clipboard_size", 1), len(CLIPBOARD_SIZES) - 1))
+        self.clip_size.currentIndexChanged.connect(lambda i: prefs.setValue("photo/clipboard_size", i))
+        self.clip_size.setToolTip("Long edge of the PNG put on the clipboard; clipboard managers drop very large images")
+        form.addRow("Clipboard image", self.clip_size)
         self.reset_button = QPushButton("Reset all preferences")
         self.reset_button.clicked.connect(self.reset_prefs)
         form.addRow(self.reset_button)
@@ -1724,6 +1733,9 @@ class CaptureTab(QWidget):
 
     def timer_seconds(self):
         return self.timer_values[self.timer.currentIndex()]
+
+    def clipboard_max_edge(self):
+        return CLIPBOARD_SIZES[self.clip_size.currentIndex()][1]
 
     def photo_dir(self):
         return os.path.expanduser(self.photo_dir_edit.text().strip() or default_pictures_dir())
