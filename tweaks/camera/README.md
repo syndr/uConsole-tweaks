@@ -34,14 +34,16 @@ crashed after a few shots (see below).
 |                                              |  settings drawer   |
 |                                              |  (Tab / ⚙ hides)   |
 +----------------------------------------------+--------------------+
-| Photo Video ⏱Off EV0.0 11.9MP Zoom --o-- 1.0x status [ Shoot ] [⚙] |
+| Photo Video [x]Clipboard EV0.0 11.9MP Zoom -o- 1.0x status [Shoot] [⚙]|
 +-------------------------------------------------------------------+
 ```
 
 - **Photo / Video** switch modes; **Shoot** takes a photo, or starts / stops
-  recording in video mode. A **self-timer** (Off / 3 / 5 / 10 s; the ⏱ button
-  cycles it, the *Capture* tab also has it) counts down on the button;
-  pressing again cancels.
+  recording in video mode. A **self-timer** (Off / 3 / 5 / 10 s, in the
+  *Capture* tab) counts down on the button; pressing again cancels.
+- **Clipboard** on the bar also copies each captured photo (jpg / png / bmp /
+  gif) to the clipboard, via `wl-copy` when available so it survives closing
+  the app, otherwise Qt's clipboard.
 - **EV** on the bar is exposure compensation (greyed out when auto-exposure is
   off); the **resolution** combo picks a preset for the current mode
   (megapixels for photos, 4K / 1080p / 720p for video).
@@ -80,7 +82,7 @@ Photos are saved as `IMG_<timestamp>.<ext>` and videos as `VID_<timestamp>.<ext>
 *Capture* tab.
 
 Setup choices are remembered in `~/.config/uconsole-camera/uconsole-camera.conf`:
-folders, formats, JPEG quality, self-timer, AE metering, resolution, sensor mode, live-preview mode, video
+folders, formats, JPEG quality, self-timer, clipboard copy, AE metering, resolution, sensor mode, live-preview mode, video
 preset / quality / frame rate, AF mode, drawer and fullscreen state, last tab.
 Per-shot controls (exposure, gains, tuning sliders, zoom) start fresh each
 launch. *Reset all preferences* clears the file.

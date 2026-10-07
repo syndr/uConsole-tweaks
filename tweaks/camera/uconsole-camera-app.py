@@ -15,13 +15,15 @@
 #     compositor).
 
 import os
+import shutil
+import subprocess
 import sys
 import threading
 from datetime import datetime
 
 import numpy as np
 from PyQt5.QtCore import QEvent, QSettings, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QKeySequence, QPainter, QPalette
+from PyQt5.QtGui import QImage, QKeySequence, QPainter, QPalette
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -246,6 +248,27 @@ status_timer = QTimer()
 status_timer.setSingleShot(True)
 
 
+MIME_TYPES = {"jpg": "image/jpeg", "png": "image/png", "bmp": "image/bmp", "gif": "image/gif"}
+
+
+def copy_to_clipboard(path):
+    """Put a saved photo on the clipboard. Prefers wl-copy, which keeps serving the
+    data after this app exits; falls back to Qt's clipboard."""
+    ext = path.rsplit(".", 1)[-1].lower()
+    mime = MIME_TYPES.get(ext)
+    if mime is None:
+        return "not copied (clipboard supports jpg/png/bmp/gif)"
+    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-copy"):
+        with open(path, "rb") as f:
+            subprocess.Popen(["wl-copy", "--type", mime], stdin=f, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return "copied to clipboard"
+    image = QImage(path)
+    if image.isNull():
+        return "not copied (could not load image)"
+    app.clipboard().setImage(image)
+    return "copied to clipboard"
+
+
 def set_status(text, clear_after_ms=None):
     """Show text in the bar; with clear_after_ms it disappears after that long."""
     status_timer.stop()
@@ -379,6 +402,7 @@ def on_mode_change():
     vid_tab.reset()
     pic_tab.reset()
     capture_tab.stack.setCurrentIndex(1 if is_video else 0)
+    clip_check.setEnabled(not is_video)
     fill_res_combo()
     if is_video:
         rec_button.setText("\u25cf Record")
@@ -402,7 +426,10 @@ def capture_done(job):
             picam2.options["quality"] = pic_tab.jpeg_quality.value()
             request.save("main", path)
         request.release()
-        set_status(f"Saved {path}")
+        note = f"Saved {path}"
+        if clip_check.isChecked():
+            note += f" \u2014 {copy_to_clipboard(path)}"
+        set_status(note)
         rec_button.setEnabled(True)
         mode_group_enabled(True)
         if pic_tab.preview_check.isChecked():
@@ -1781,8 +1808,10 @@ zoom_slider.setValue(10)
 zoom_slider.setMaximumWidth(130)
 zoom_label = QLabel("1.0x")
 zoom_label.setMinimumWidth(36)
-timer_button = QPushButton()
-timer_button.setToolTip("Self-timer: click to cycle Off / 3 / 5 / 10 s")
+clip_check = QCheckBox("Clipboard")
+clip_check.setToolTip("Also copy each captured photo to the clipboard")
+clip_check.setChecked(pref("photo/clipboard", False))
+clip_check.toggled.connect(lambda v: prefs.setValue("photo/clipboard", v))
 ev_box = QDoubleSpinBox()
 ev_box.setPrefix("EV ")
 ev_box.setDecimals(1)
@@ -1802,7 +1831,7 @@ bar.setSpacing(6)
 bar.addWidget(photo_button)
 bar.addWidget(video_button)
 bar.addSpacing(12)
-bar.addWidget(timer_button)
+bar.addWidget(clip_check)
 bar.addWidget(ev_box)
 bar.addWidget(res_combo)
 bar.addWidget(QLabel("Zoom"))
@@ -1871,20 +1900,7 @@ video_button.toggled.connect(lambda checked: checked and on_mode_change())
 zoom_slider.valueChanged.connect(lambda v: pan_tab.pan_display.setZoomLevel(v / 10))
 
 
-# Bar <-> drawer mirrors: self-timer, exposure compensation, resolution preset.
-def timer_label(i):
-    secs = capture_tab.timer_values[i]
-    timer_button.setText("\u23f1 Off" if secs == 0 else f"\u23f1 {secs} s")
-
-
-def cycle_timer():
-    capture_tab.timer.setCurrentIndex((capture_tab.timer.currentIndex() + 1) % capture_tab.timer.count())
-
-
-timer_button.clicked.connect(cycle_timer)
-capture_tab.timer.currentIndexChanged.connect(timer_label)
-timer_label(capture_tab.timer.currentIndex())
-
+# Bar <-> drawer mirrors: exposure compensation, resolution preset.
 ev_box.setRange(picam2.camera_controls["ExposureValue"][0], picam2.camera_controls["ExposureValue"][1])
 ev_box.setValue(aec_tab.exposure_val.value())
 ev_box.valueChanged.connect(lambda v: aec_tab.exposure_val.setValue(v, emit=True))
