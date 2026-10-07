@@ -27,6 +27,8 @@ crashed after a few shots (see below).
 
 ## The app
 
+![uConsole Camera: live preview with the settings drawer open](screenshot.png)
+
 ```
 +----------------------------------------------+--------------------+
 |                                              | Capture Exposure … |
