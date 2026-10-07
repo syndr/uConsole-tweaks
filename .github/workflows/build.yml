@@ -1,0 +1,44 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  deb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build and check tools
+        run: sudo apt-get update -q && sudo apt-get install -y -q desktop-file-utils
+
+      - name: Syntax checks
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          bash -n make_uconsole-tweaks_package.sh
+          for f in tweaks/*/*; do
+            [ -f "$f" ] || continue
+            case "$(head -c 64 "$f")" in
+              '#!/bin/sh'*) sh -n "$f" ;;
+              '#!/bin/bash'*) bash -n "$f" ;;
+              '#!/usr/bin/python3'*|'#!/usr/bin/env python3'*) python3 -m py_compile "$f" ;;
+            esac
+          done
+          desktop-file-validate tweaks/*/*.desktop
+
+      - name: Build package
+        run: make build
+
+      - name: Inspect package
+        run: |
+          dpkg-deb --info uconsole-tweaks.deb
+          dpkg-deb --contents uconsole-tweaks.deb
+          lintian --version >/dev/null 2>&1 && lintian --no-tag-display-limit uconsole-tweaks.deb || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uconsole-tweaks.deb
+          path: uconsole-tweaks.deb
