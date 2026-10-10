@@ -4,3 +4,6 @@ __pycache__/
 *.pyc
 *.swp
 .DS_Store
+zmk-uc9900/.build/
+zmk-uc9900/out/
+zmk-uc9900/backup/
