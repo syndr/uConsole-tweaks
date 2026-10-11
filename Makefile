@@ -6,7 +6,7 @@ SOURCES := $(wildcard tweaks/*/*) make_uconsole-tweaks_package.sh
 SERVICES := zmk-cursor-scroll
 
 .PHONY: all build install uninstall reinstall clean status logs help \
-	zmk-uc9900 zmk-uc9900-stock zmk-uc9900-backup zmk-uc9900-flash
+	zmk-uc9900 zmk-uc9900-stock zmk-uc9900-setup zmk-uc9900-backup zmk-uc9900-flash
 
 all: $(DEB)
 
@@ -40,6 +40,11 @@ zmk-uc9900:
 zmk-uc9900-stock:
 	./zmk-uc9900/build.sh stock
 
+# One-time: lets this user mount the keyboard's bootloader drive from any
+# session (SSH included) without a password. Needs a terminal for sudo.
+zmk-uc9900-setup:
+	sudo install -m 644 zmk-uc9900/50-uf2-bootloader.rules /etc/polkit-1/rules.d/
+
 zmk-uc9900-backup:
 	./zmk-uc9900/flash.sh backup $(if $(RESTORE),--restore)
 
@@ -58,6 +63,7 @@ help:
 	@echo "  logs        follow journalctl for all shipped services"
 	@echo "  zmk-uc9900         build our keyboard firmware"
 	@echo "  zmk-uc9900-stock   build the stock keyboard firmware (recovery image)"
+	@echo "  zmk-uc9900-setup   install the polkit rule that lets backup/flash mount the bootloader drive (once)"
 	@echo "  zmk-uc9900-backup  save the firmware currently on the keyboard (RESTORE=1 writes it back)"
 	@echo "  zmk-uc9900-flash   flash a keyboard firmware image: UF2=<file>"
 	@echo ""

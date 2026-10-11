@@ -10,6 +10,8 @@
 # so the script runs hands-off once the bootloader drive appears. Have SSH or
 # another keyboard ready in case something goes wrong.
 set -euo pipefail
+# Without this, a failing command inside $(...) does not stop the script.
+shopt -s inherit_errexit
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The vendor README says the drive is called NICENANO; the jhob101 fork reports
@@ -49,12 +51,29 @@ wait_for_drive() {
     exit 1
 }
 
+# Prints the mount point. udisks mounts the drive without asking only from the
+# local desktop session; over SSH it wants an admin password, which the polkit
+# rule installed by `make zmk-uc9900-setup` makes unnecessary for this drive.
 mount_drive() {
     local mp
     mp="$(findmnt -n -o TARGET "$DEV" 2>/dev/null || true)"
     if [ -z "$mp" ]; then
-        udisksctl mount -b "$DEV" --no-user-interaction >/dev/null
+        if ! udisksctl mount -b "$DEV" --no-user-interaction >/dev/null; then
+            cat >&2 <<EOF
+error: could not mount $DEV (see udisks message above).
+  From SSH or a non-interactive shell, udisks needs authorization: run
+  'make zmk-uc9900-setup' once (installs a polkit rule, asks for sudo), or run
+  this from a terminal on the uConsole's desktop. The keyboard stays in its
+  bootloader until an image is written, or returns to its firmware on its own
+  about six minutes after entering the bootloader.
+EOF
+            exit 1
+        fi
         mp="$(findmnt -n -o TARGET "$DEV")"
+    fi
+    if [ -z "$mp" ]; then
+        echo "error: $DEV mounted but no mount point found" >&2
+        exit 1
     fi
     echo "$mp"
 }
@@ -97,7 +116,7 @@ case "${1:-}" in
         dest="$HERE/backup/$(date +%Y%m%d-%H%M%S)"
         mkdir -p "$dest"
         for f in INFO_UF2.TXT CURRENT.UF2 INDEX.HTM; do
-            [ -e "$mp/$f" ] && cp "$mp/$f" "$dest/"
+            if [ -e "$mp/$f" ]; then cp "$mp/$f" "$dest/"; fi
         done
         sync
         echo "saved to $dest:"
@@ -111,7 +130,7 @@ case "${1:-}" in
             write_image "$dest/CURRENT.UF2" "$mp"
         else
             udisksctl unmount -b "$DEV" --no-user-interaction >/dev/null || true
-            echo "the keyboard is still in its bootloader: power-cycle it, or flash an image, to leave"
+            echo "the keyboard is still in its bootloader: flash an image to leave now, or wait; it returns to its firmware about six minutes after entering"
         fi
         ;;
     flash)

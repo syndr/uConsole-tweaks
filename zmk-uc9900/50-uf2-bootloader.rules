@@ -1,0 +1,18 @@
+// Let members of "plugdev" mount and unmount the uc9900 keyboard's UF2
+// bootloader drive from any session, including SSH, without a password.
+//
+// udisks only grants password-less mounts to the local graphical session;
+// from SSH it asks for an admin password, which a non-interactive shell
+// cannot supply. The drive enumerates as vendor "Adafruit", model "nRF UF2"
+// (labelled ADM840BOOT or NICENANO). Nothing else matches this rule.
+//
+// Install (once):  make zmk-uc9900-setup
+//            or:   sudo install -m 644 50-uf2-bootloader.rules /etc/polkit-1/rules.d/
+polkit.addRule(function (action, subject) {
+    if (action.id.indexOf("org.freedesktop.udisks2.filesystem-mount") === 0 &&
+        action.lookup("drive.vendor") === "Adafruit" &&
+        action.lookup("drive.model") === "nRF UF2" &&
+        subject.isInGroup("plugdev")) {
+        return polkit.Result.YES;
+    }
+});
