@@ -7,7 +7,7 @@
 | Path | What it is |
 | --- | --- |
 | `stock/` | The vendor's firmware config for the **v2** keyboard, unmodified: [Bill-lulu/uc9900](https://github.com/Bill-lulu/uc9900) branch `V2.0` at `9e0de2d`. The only change is `config/west.yml`, which pins the vendor's ZMK fork (`ZitaoTech/zmk`, branch `bbkeyboard_tp`) to the commit it pointed at. This builds the recovery image. |
-| `config/` | Our firmware, on **upstream ZMK v0.3.0** (pinned in `config/west.yml`) instead of the vendor's 2023 fork. `config/boards/arm/bb9900/` is the board: the vendor's matrix, pins and flash layout, plus a small polled driver for the A320 trackpad sensor that feeds ZMK's pointing subsystem. The keymap changes are listed at the top of `config/bb9900.keymap`; see [Keymap](#keymap). |
+| `config/` | Our firmware, on **upstream ZMK v0.3.0** (pinned in `config/west.yml`) instead of the vendor's 2023 fork. `config/boards/arm/bb9900/` is the board: the vendor's matrix, pins and flash layout, a small polled driver for the A320 trackpad sensor that feeds ZMK's pointing subsystem, the scroll-direction processor and toggle behavior, the Caps Lock scroll glue and the trackpad light. The keymap changes are listed at the top of `config/bb9900.keymap`; see [Keymap](#keymap). |
 | `build.sh` | Builds a firmware image with `podman` (or `docker`) in `zmkfirmware/zmk-build-arm:3.5`. |
 | `flash.sh` | Backs up or flashes the keyboard through its bootloader, hands-off. |
 | `50-uf2-bootloader.rules` | polkit rule so `flash.sh` can mount the bootloader drive from an SSH session. See "Setup". |
@@ -21,7 +21,11 @@ Everything the vendor keymap does, with these changes:
 
 | Keys | Does | Vendor firmware |
 | --- | --- | --- |
-| Select | gamepad Select (`KEY_FRONT`); hold = scroll via [`zmk-cursor-scroll`](../tweaks/zmk-cursor-scroll) | Caps Lock |
+| Select | tap = gamepad Select (`KEY_FRONT`); hold = the trackpad scrolls | Caps Lock |
+| Fn + Tab (Caps Lock) | Caps Lock, and the trackpad scrolls while it is on | same, coarse and reversed |
+| Fn + `/` | scroll switch: trackpad scrolls until pressed again | – |
+| Fn + `'` | flip the scroll direction (natural / inverted); remembered | – |
+| Y or B held + D-pad | moves the pointer; a tap still sends F21 / F23 | F21 / F23 only |
 | Start | tap = Play, hold = Super | Play |
 | Tab | tap = Tab, hold = Super | Tab (keyd did the hold on the host) |
 | Speaker / Shift+Speaker / Fn+Speaker | Volume down / up / mute | Mute / nothing useful / volume |
@@ -37,7 +41,11 @@ Everything the vendor keymap does, with these changes:
 
 Switching the output to Bluetooth makes the keyboard drive the paired device instead of the uConsole, trackpad included, until it is switched back. Key positions are listed at the top of the keymap.
 
-Not carried over from the vendor firmware: Caps Lock no longer puts the trackpad into scroll mode (that returns, with hold-Select, when scrolling moves into the firmware), and the layer-indicator LED on P0.03 is not driven.
+### Scrolling
+
+Scrolling is done in the firmware, so the [`zmk-cursor-scroll`](../tweaks/zmk-cursor-scroll) daemon is not needed with this build (it stays idle if left running: the firmware never sends the F19 it listens for). All three ways in, hold Select, Caps Lock and the Fn+`/` switch, share one scroll layer, so they scroll the same way and at the same speed. The trackpad light goes out while scrolling. Scrolling is smooth: the firmware enables the HID resolution multiplier and Linux turns it into high-resolution wheel events, so Firefox and VS Code scroll too, which jhob101's coarse implementation could not do. The default direction is natural (the content follows the finger), the same as the daemon; Fn+`'` flips it and the choice is stored on the keyboard. Speed is set by `SCROLL_MUL`/`SCROLL_DIV` at the top of the keymap (3/8 ≈ the daemon's 64 pointer pixels per notch).
+
+Not carried over from the vendor firmware: the layer-indicator LED on P0.03 is not driven.
 
 ## Build
 

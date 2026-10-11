@@ -47,4 +47,23 @@ config INPUT_A320_OFN_ENGINE
 
 endif # INPUT_A320
 
+config UC9900_SCROLL_LAYER
+    int "Keymap layer that puts the trackpad into scroll mode"
+    default 4
+    help
+      Must match the SCROLL layer number in bb9900.keymap. Used by the Caps
+      Lock glue and the trackpad light.
+
+config UC9900_CAPS_SCROLL
+    bool "Host Caps Lock switches the trackpad into scroll mode"
+    default y
+    depends on ZMK_HID_INDICATORS
+    help
+      Activates the scroll layer while the host reports Caps Lock on, as the
+      vendor firmware did, sharing direction and speed with hold-Select.
+
+config UC9900_SCROLL_LIGHT
+    bool "Trackpad light off while scroll mode is active"
+    default y
+
 endmenu

@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+
+description: |
+  Negates wheel events (INPUT_REL_WHEEL / INPUT_REL_HWHEEL) when the scroll
+  direction has been set to inverted with the scroll_dir_tog behavior. The
+  setting is stored in Zephyr settings.
+
+compatible: "uconsole,input-processor-scroll-dir"
+
+include: ip_zero_param.yaml

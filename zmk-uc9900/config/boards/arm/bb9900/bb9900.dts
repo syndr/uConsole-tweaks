@@ -111,11 +111,24 @@ RC(6,0)  RC(6,1) RC(6,2)                 RC(6,5)                 RC(6,7)  RC(6,8
     };
 
     /* The vendor firmware used the sensor's Y as the pointer's X and vice
-     * versa, then multiplied by 1.5. Overridable from the keymap. */
+     * versa, then multiplied by 1.5. The keymap adds a scroll-layer override. */
     trackpad_listener: trackpad_listener {
         compatible = "zmk,input-listener";
         device = <&trackpad>;
         input-processors = <&zip_xy_transform INPUT_TRANSFORM_XY_SWAP>, <&zip_xy_scaler 3 2>;
+    };
+
+    /* Scroll direction (natural/inverted), see scroll_dir.c. */
+    scroll_dir: scroll_dir {
+        compatible = "uconsole,input-processor-scroll-dir";
+        #input-processor-cells = <0>;
+    };
+
+    behaviors {
+        scroll_dir_tog: scroll_dir_toggle {
+            compatible = "uconsole,behavior-scroll-dir-toggle";
+            #binding-cells = <0>;
+        };
     };
 };
 
