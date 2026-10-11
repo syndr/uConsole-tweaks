@@ -1,0 +1,89 @@
+# Builds the uc9900 keyboard firmware. Every push to main and every pull
+# request touching zmk-uc9900/ builds both images as a check and keeps them as
+# run artifacts; a tag matching zmk-uc9900-v* also publishes them as a GitHub
+# Release with checksums.
+name: zmk-uc9900 firmware
+
+on:
+  push:
+    branches: [main]
+    tags: ["zmk-uc9900-v*"]
+  pull_request:
+    paths:
+      - "zmk-uc9900/**"
+      - ".github/workflows/zmk-uc9900.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    # The same image build.sh uses locally.
+    container: docker.io/zmkfirmware/zmk-build-arm:3.5
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [custom, stock]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache the west workspace (ZMK, Zephyr, modules)
+        uses: actions/cache@v4
+        with:
+          path: |
+            zmk-uc9900/.build/${{ matrix.target }}/.west
+            zmk-uc9900/.build/${{ matrix.target }}/zmk
+            zmk-uc9900/.build/${{ matrix.target }}/zephyr
+            zmk-uc9900/.build/${{ matrix.target }}/modules
+          key: west-${{ matrix.target }}-${{ hashFiles('zmk-uc9900/config/west.yml', 'zmk-uc9900/stock/config/west.yml') }}
+          restore-keys: west-${{ matrix.target }}-
+
+      - name: Build
+        run: ZMK_IN_CONTAINER=1 ./zmk-uc9900/build.sh ${{ matrix.target }}
+
+      - name: Check the image
+        run: python3 zmk-uc9900/check-uf2.py zmk-uc9900/out/*.uf2
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bb9900-${{ matrix.target }}
+          path: zmk-uc9900/out/*.uf2
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    if: startsWith(github.ref, 'refs/tags/zmk-uc9900-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum *.uf2 > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Release notes
+        run: |
+          version="${GITHUB_REF_NAME#zmk-uc9900-}"
+          sed "s/@VERSION@/${version}/g" zmk-uc9900/release-notes.md > notes.md
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#zmk-uc9900-}"
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "zmk-uc9900 ${version}" --notes-file notes.md \
+            dist/*.uf2 dist/SHA256SUMS

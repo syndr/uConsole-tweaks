@@ -2,6 +2,12 @@
 
 [ZMK](https://zmk.dev) firmware for the uConsole Trackpad Keyboard ("uc9900" / `bb9900`) made by [lululvlv](https://forum.clockworkpi.com/u/lululvlv) — the keyboard the rest of this repo's tweaks assume. Built locally in a container and flashed over the keyboard's UF2 bootloader. Nothing here is part of the `.deb`.
 
+## Downloads
+
+Ready-built images are on the [releases page](https://github.com/syndr/uConsole-tweaks/releases) under the `zmk-uc9900-v*` tags: `bb9900-uconsole.uf2` (the firmware), `bb9900-stock-v2.uf2` (the vendor's firmware rebuilt, to go back) and `SHA256SUMS`. GitHub Actions builds both images on every change (the `zmk-uc9900 firmware` workflow) and publishes a release when a `zmk-uc9900-v*` tag is pushed. `check-uf2.py <file>` verifies a downloaded image before flashing.
+
+To flash a download without this repo: enter the bootloader with Fn + `\`, and copy the `.uf2` onto the `ADM840BOOT` drive that appears. With the repo, `make zmk-uc9900-flash UF2=<file>` does it hands-off (see [Flash](#flash)).
+
 ## What's here
 
 | Path | What it is |
