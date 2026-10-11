@@ -18,6 +18,9 @@ The keyboard's [firmware](https://github.com/Bill-lulu/uc9900) changed what Sele
 | --- | --- | --- | --- |
 | Built before 2026-06-26 | `KEY_FRONT` | gamepad Select | scroll |
 | Built since (incl. the v2 keyboard) | `KEY_CAPSLOCK` | Caps Lock | scroll |
+| [`zmk-uc9900`](../../zmk-uc9900) (this repo's build) | `KEY_FRONT` | gamepad Select | scroll |
+
+The `zmk-uc9900` build keeps Caps Lock on Fn+Tab and adds Super on a held Start; it reports the same keyd ID, so nothing here changes for it.
 
 On the newer firmware Fn+Tab also sends Caps Lock, and the host can't tell it from Select — so both get the same tap/hold behavior, and there is no gamepad Select.
 

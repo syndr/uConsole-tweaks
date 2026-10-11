@@ -7,7 +7,7 @@
 | Path | What it is |
 | --- | --- |
 | `stock/` | The vendor's firmware config for the **v2** keyboard, unmodified: [Bill-lulu/uc9900](https://github.com/Bill-lulu/uc9900) branch `V2.0` at `9e0de2d`. The only change is `config/west.yml`, which pins the vendor's ZMK fork (`ZitaoTech/zmk`, branch `bbkeyboard_tp`) to the commit it pointed at. This builds the recovery image. |
-| `config/` | Our firmware. For now this is the vendor config on the same ZMK fork with three keymap changes, listed at the top of `config/bb9900.keymap`: Select sends gamepad Select again instead of Caps Lock, Start is Super when held, and Fn+Start sends Pause. |
+| `config/` | Our firmware. For now this is the vendor config on the same ZMK fork with three keymap changes, listed at the top of `config/bb9900.keymap`: Select sends gamepad Select again instead of Caps Lock (so a tap is Select and a hold scrolls through `zmk-cursor-scroll`), Start is Super when held, and Fn+Start sends Pause. Caps Lock stays on Fn+Tab, including its scroll mode. Verified on the v2 keyboard on 2026-10-11. |
 | `build.sh` | Builds a firmware image with `podman` (or `docker`) in `zmkfirmware/zmk-build-arm:3.5`. |
 | `flash.sh` | Backs up or flashes the keyboard through its bootloader, hands-off. |
 | `50-uf2-bootloader.rules` | polkit rule so `flash.sh` can mount the bootloader drive from an SSH session. See "Setup". |
