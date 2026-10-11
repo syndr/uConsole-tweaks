@@ -7,13 +7,37 @@
 | Path | What it is |
 | --- | --- |
 | `stock/` | The vendor's firmware config for the **v2** keyboard, unmodified: [Bill-lulu/uc9900](https://github.com/Bill-lulu/uc9900) branch `V2.0` at `9e0de2d`. The only change is `config/west.yml`, which pins the vendor's ZMK fork (`ZitaoTech/zmk`, branch `bbkeyboard_tp`) to the commit it pointed at. This builds the recovery image. |
-| `config/` | Our firmware. For now this is the vendor config on the same ZMK fork with three keymap changes, listed at the top of `config/bb9900.keymap`: Select sends gamepad Select again instead of Caps Lock (so a tap is Select and a hold scrolls through `zmk-cursor-scroll`), Start is Super when held, and Fn+Start sends Pause. Caps Lock stays on Fn+Tab, including its scroll mode. Verified on the v2 keyboard on 2026-10-11. |
+| `config/` | Our firmware, on **upstream ZMK v0.3.0** (pinned in `config/west.yml`) instead of the vendor's 2023 fork. `config/boards/arm/bb9900/` is the board: the vendor's matrix, pins and flash layout, plus a small polled driver for the A320 trackpad sensor that feeds ZMK's pointing subsystem. The keymap changes are listed at the top of `config/bb9900.keymap`; see [Keymap](#keymap). |
 | `build.sh` | Builds a firmware image with `podman` (or `docker`) in `zmkfirmware/zmk-build-arm:3.5`. |
 | `flash.sh` | Backs up or flashes the keyboard through its bootloader, hands-off. |
 | `50-uf2-bootloader.rules` | polkit rule so `flash.sh` can mount the bootloader drive from an SSH session. See "Setup". |
 | `LICENSE.vendor` | MIT license of the vendor config (© 2024 Zitao). |
 
 Build outputs (`out/`), the cached west workspace (`.build/`) and backups (`backup/`) are not tracked.
+
+## Keymap
+
+Everything the vendor keymap does, with these changes:
+
+| Keys | Does | Vendor firmware |
+| --- | --- | --- |
+| Select | gamepad Select (`KEY_FRONT`); hold = scroll via [`zmk-cursor-scroll`](../tweaks/zmk-cursor-scroll) | Caps Lock |
+| Start | tap = Play, hold = Super | Play |
+| Tab | tap = Tab, hold = Super | Tab (keyd did the hold on the host) |
+| Speaker / Shift+Speaker / Fn+Speaker | Volume down / up / mute | Mute / nothing useful / volume |
+| Fn + Right Alt, Fn + Right Ctrl | Alt, Ctrl | dead |
+| Fn + Start | Pause | phantom mouse clicks |
+| Right Fn + Esc | switch output between USB and the selected Bluetooth profile | clear all Bluetooth bonds |
+| Right Fn + 1–4 | select Bluetooth profile 1–4 | same |
+| Left Alt + Right Alt + Start | bootloader | – |
+| Fn + `\` | bootloader | same |
+| both Fn + Esc | clear Bluetooth bonds | right Fn + Esc |
+| both Fn + R | restart the keyboard | right Fn, then left Fn |
+| Fn + Tab | Caps Lock | same |
+
+Switching the output to Bluetooth makes the keyboard drive the paired device instead of the uConsole, trackpad included, until it is switched back. Key positions are listed at the top of the keymap.
+
+Not carried over from the vendor firmware: Caps Lock no longer puts the trackpad into scroll mode (that returns, with hold-Select, when scrolling moves into the firmware), and the layer-indicator LED on P0.03 is not driven.
 
 ## Build
 
@@ -51,6 +75,15 @@ Take a backup before flashing anything, and keep a copy off the device.
 - **The bootloader leaves on its own after six minutes** if nothing is flashed (observed on 2026-10-11: entered 14:20:35, keyboard back at 14:26:35 with no writes; it is `DFU_TIMEOUT_INTERVAL = 360000` ms in the bootloader's DFU library). So an accidental Fn + `\` heals itself, and there is no need to power-cycle to get out. Start `flash.sh` before pressing the chord so the work is done inside that window.
 - If a firmware boots but misbehaves, Fn + `\` still enters the bootloader as long as the key matrix and that binding are intact. Never remove `&bootloader` from the keymap.
 - If the drive reappears a few seconds after a flash, that is a stuck unmount on the uConsole side, not a bad flash (reported by the [jhob101 firmware](https://github.com/jhob101/uconsole-bb9900-keyboard)): reboot the uConsole and flash again.
+- **If the keyboard vanishes after a reset** and `dmesg` shows `usb 1-1.1: device descriptor read/64, error -71` or `device not accepting address`, the uConsole's USB host port is stuck, not the keyboard (seen once here after the Alt+Alt+Start chord; jhob101 saw the same log after a flash). The port shows `state=powered` under `/sys/bus/usb/devices/1-1/1-1:1.0/1-1-port1/` and gets no further connect events, so even the bootloader's six-minute exit goes unnoticed. In order of effort:
+
+  ```sh
+  echo 1 | sudo tee /sys/bus/usb/devices/1-1/1-1:1.0/1-1-port1/disable; sleep 2; echo 0 | sudo tee /sys/bus/usb/devices/1-1/1-1:1.0/1-1-port1/disable
+  echo 1-1 | sudo tee /sys/bus/usb/drivers/usb/unbind; sleep 2; echo 1-1 | sudo tee /sys/bus/usb/drivers/usb/bind
+  sudo reboot
+  ```
+
+  The reboot is what worked on 2026-10-11; the first two are untested shortcuts (the hub is a Genesys Logic 05e3:0608 with per-port control).
 - If a firmware does not boot at all, the key combo is gone and recovery needs a hardware way into the bootloader. **Not established yet.** The bootloader is the [Adafruit nRF52 bootloader](https://github.com/adafruit/Adafruit_nRF52_Bootloader) 0.10.0 built for the Atelier-du-Maker board (`Board-ID: ADM_B_NRF52840_1`, no SoftDevice, built 2026-02-03, read from `INFO_UF2.TXT`). That build has two hardware ways in: hold its DFU input **P0.11** low (it is pulled up) while power is applied, or a double reset on the chip's reset pin within 500 ms. P0.11 is not used by the key matrix. Whether the keyboard PCB exposes either pin is unknown.
 
 ### Bootloader facts

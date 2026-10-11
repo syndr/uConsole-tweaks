@@ -1,45 +1,116 @@
 /*
- * Copyright (c) 2023 ZitaoTech
+ * uc9900 (uConsole Trackpad Keyboard) keymap for uConsole-tweaks, on ZMK v0.3.0.
+ * Derived from the vendor keymap (Bill-lulu/uc9900 V2.0, MIT).
  *
- * SPDX-License-Identifier: MIT
- */
-   
-/*
- * uConsole-tweaks changes from the vendor keymap (uc9900 V2.0):
- *   - Select: &kp CAPS -> &kp K_SELECT (gamepad Select again; Caps Lock stays on Fn+Tab)
- *   - Start:  tap = C_PLAY as before, hold = Left GUI (Super)
- *   - Fn+Start: &mkp C_PAUSE -> &kp C_PAUSE (was a mouse-button binding on a consumer key)
+ * Changes from the vendor keymap:
+ *   - Select: gamepad Select (K_SELECT) instead of Caps Lock. Caps Lock stays on Fn+Tab.
+ *   - Start: tap = Play, hold = Super. Left Alt + Right Alt + Start = bootloader.
+ *   - Tab: tap = Tab, hold = Super (what the keyd config did on the host).
+ *   - Speaker: Volume Down; Shift+Speaker = Volume Up; Fn+Speaker = Mute.
+ *   - Right Alt and Right Ctrl work under both Fn keys (they were unbound).
+ *   - Fn+Start sends Pause (vendor bound a consumer code to the mouse-button behavior).
+ *   - Right Fn + Esc toggles the output between USB and the selected Bluetooth
+ *     profile; clearing bonds moved to both Fn keys + Esc so it can't be hit by accident.
+ *   - Both Fn keys + R restarts the keyboard (was right Fn + left Fn).
+ *
+ * ZMK combos are deliberately not used: on this board they break the Enter key.
+ *
+ * Key positions (74 keys):
+ *    0 Left   1 L-btn   2 Trackpad press   3 Y   4 X
+ *    5 Up     6 Down    7 Right   8 R-btn   9 B  10 A
+ *   11 Esc   12 Select  13 Start  14 Speaker  15 [  16 ]  17 /  18 -  19 =  20 backslash
+ *   21 `     22-31 1..0  32 Backspace
+ *   33 Tab   34-43 Q..P
+ *   44 '     45-54 A..;  55 Enter
+ *   56 LShift  57-65 Z../.  66 RShift
+ *   67 Fn-L  68 LCtrl  69 LAlt  70 Space  71 RAlt  72 RCtrl  73 Fn-R
  */
 
 #include <behaviors.dtsi>
 #include <dt-bindings/zmk/keys.h>
 #include <dt-bindings/zmk/bt.h>
 #include <dt-bindings/zmk/outputs.h>
-#include <dt-bindings/zmk/mouse.h>
+#include <dt-bindings/zmk/pointing.h>
 #include <dt-bindings/zmk/backlight.h>
 #include <dt-bindings/zmk/ext_power.h>
 
-#define SYM 1
-#define UPPER 2
-
- 
-
+#define BASE  0
+#define SYM   1   // left Fn
+#define UPPER 2   // right Fn
+#define BOTH  3   // both Fn keys
 
 / {
     behaviors {
-        td0: tap_dance_0 {
-            compatible = "zmk,behavior-tap-dance";
-            #binding-cells = <0>;
-            tapping-term-ms = <400>;
-            bindings = <&mkp LCLK>, <&bt BT_CLR>;
-        };
-    };
-    behaviors {
-        hm: homerow_mods {
+        // Tab: tap = Tab, hold = Super. "balanced" also counts a hold when another
+        // key is pressed and released while Tab is down, like keyd's overloadt2.
+        tabgui: tab_super {
             compatible = "zmk,behavior-hold-tap";
             #binding-cells = <2>;
-            tapping-term-ms = <500>;
-            bindings = <&out &kp>;
+            flavor = "balanced";
+            tapping-term-ms = <200>;
+            quick-tap-ms = <150>;
+            bindings = <&kp>, <&kp>;
+        };
+
+        // Start: tap = Play, hold = Super.
+        startgui: start_super {
+            compatible = "zmk,behavior-hold-tap";
+            #binding-cells = <2>;
+            flavor = "balanced";
+            tapping-term-ms = <200>;
+            quick-tap-ms = <150>;
+            bindings = <&kp>, <&kp>;
+        };
+
+        // Start with both Alt keys held enters the bootloader. Two nested
+        // mod-morphs stand in for a combo. Alt is kept so Alt+Start chords
+        // still carry Alt.
+        start_key: start_key {
+            compatible = "zmk,behavior-mod-morph";
+            #binding-cells = <0>;
+            bindings = <&startgui LGUI C_PLAY>, <&start_ralt>;
+            mods = <(MOD_LALT)>;
+            keep-mods = <(MOD_LALT)>;
+        };
+        start_ralt: start_ralt {
+            compatible = "zmk,behavior-mod-morph";
+            #binding-cells = <0>;
+            bindings = <&startgui LGUI C_PLAY>, <&bootloader>;
+            mods = <(MOD_RALT)>;
+            keep-mods = <(MOD_RALT)>;
+        };
+
+        // Speaker: Volume Down, Shift+Speaker = Volume Up.
+        // A plain mod-morph is not enough: it masks Shift only in the keyboard
+        // report, and a consumer key never resends that report, so the host
+        // kept seeing Shift+VolumeUp (verified by capture). The morphs pick the
+        // Shift that is held and run a macro that releases it, taps Volume Up
+        // and presses it again, which forces the keyboard report out.
+        spk_vol: speaker_volume {
+            compatible = "zmk,behavior-mod-morph";
+            #binding-cells = <0>;
+            bindings = <&spk_vol_r>, <&vol_up_lsft>;
+            mods = <(MOD_LSFT)>;
+        };
+        spk_vol_r: speaker_volume_rshift {
+            compatible = "zmk,behavior-mod-morph";
+            #binding-cells = <0>;
+            bindings = <&kp C_VOL_DN>, <&vol_up_rsft>;
+            mods = <(MOD_RSFT)>;
+        };
+        vol_up_lsft: vol_up_lsft {
+            compatible = "zmk,behavior-macro";
+            #binding-cells = <0>;
+            wait-ms = <0>;
+            tap-ms = <20>;
+            bindings = <&macro_release &kp LSHFT>, <&macro_tap &kp C_VOL_UP>, <&macro_press &kp LSHFT>;
+        };
+        vol_up_rsft: vol_up_rsft {
+            compatible = "zmk,behavior-macro";
+            #binding-cells = <0>;
+            wait-ms = <0>;
+            tap-ms = <20>;
+            bindings = <&macro_release &kp RSHFT>, <&macro_tap &kp C_VOL_UP>, <&macro_press &kp RSHFT>;
         };
     };
 
@@ -47,60 +118,58 @@
         compatible = "zmk,keymap";
 
         default_layer {
-
             bindings = <
-//---------------------------------------------------------------------------------------------------------
-// |  ←  | ↑   | ↓   | →   |  Mleft  |  Mright |  Trackpad    |  Y  |  B  |  X  |  A  |                                       
-// |  ESC   |  SELECT  | Start |                 voive  |   [  |  ]  |   /  |  -  |  =  |  \  |
-// |   ~   |  1  |  2  |  3  |  4  |  5  |  6  |  7  |  8  |  9  |  0  |  Backspace  |
-// |   TAB   |  Q  |  W  |  E  |  R  |  T  |  Y  |  U  |  I  |  O  |  P  | 
-// |    '      |  A  |  S  |  D  |  F  |  G  |  H  |  J  |  K  |  L  |  ;  |     ENTER   |  
-// |  LShift  |  Z  |  X  |  C  |  V  |  B  |  N  |  M  |  <  |  >  |  ;  |  RShift  |  
-//        |  Fn  |  LCtrl  |  Alt   |      SPACE      |   Alt   |  RCtrl   |  Fn   |  
-//        -----------------------------------------------------------------------------------------------------------------
-            &kp LEFT                      &mkp LCLK         &mkp LCLK      &kp F21   &kp F22 
-&kp UP   &kp DOWN &kp RIGHT               &mkp RCLK                       &kp  F23      &kp F24
-&kp ESC    &kp K_SELECT  &mt LGUI C_PLAY &kp K_MUTE    &kp LBKT   &kp RBKT   &kp FSLH   &kp MINUS  &kp  EQUAL &kp BACKSLASH                                                                                  
-&kp GRAVE  &kp N1        &kp N2     &kp N3   &kp N4     &kp N5     &kp N6     &kp N7     &kp N8    &kp N9  &kp N0 &kp BSPC
-&kp TAB     &kp Q         &kp W      &kp E    &kp R      &kp T      &kp Y      &kp U      &kp I     &kp O   &kp P
-&kp SQT     &kp A         &kp S      &kp D    &kp F      &kp G      &kp H      &kp J      &kp K     &kp L   &kp SEMICOLON &kp ENTER        
-&kp LSHFT   &kp Z         &kp X      &kp C    &kp V      &kp B      &kp N      &kp M      &kp COMMA &kp DOT &kp RSHFT
-  &mo SYM   &kp LCTRL               &kp LALT              &kp SPACE           &kp RALT         &kp RCTRL     &mo UPPER        
+            &kp LEFT                  &mkp LCLK      &mkp LCLK     &kp F21     &kp F22
+&kp UP   &kp DOWN  &kp RIGHT                        &mkp RCLK                 &kp F23     &kp F24
+&kp ESC    &kp K_SELECT  &start_key   &spk_vol    &kp LBKT   &kp RBKT   &kp FSLH   &kp MINUS  &kp EQUAL  &kp BACKSLASH
+&kp GRAVE  &kp N1   &kp N2   &kp N3   &kp N4   &kp N5   &kp N6   &kp N7   &kp N8     &kp N9   &kp N0  &kp BSPC
+&tabgui LGUI TAB   &kp Q   &kp W   &kp E   &kp R   &kp T   &kp Y   &kp U   &kp I      &kp O    &kp P
+&kp SQT    &kp A    &kp S    &kp D    &kp F    &kp G    &kp H    &kp J    &kp K      &kp L    &kp SEMICOLON  &kp ENTER
+&kp LSHFT  &kp Z    &kp X    &kp C    &kp V    &kp B    &kp N    &kp M    &kp COMMA  &kp DOT  &kp RSHFT
+  &mo SYM  &kp LCTRL         &kp LALT          &kp SPACE         &kp RALT       &kp RCTRL   &mo UPPER
             >;
         };
 
-
+        // Left Fn
         sym_layer {
-
             bindings = <
-        &kp LEFT                      &mkp LCLK         &mkp RCLK      &kp Y   &kp X 
-&kp K_VOL_UP   &kp K_VOL_DN &kp RIGHT               &mkp RCLK                       &kp  B      &kp A
-&kp C_AL_SCREENSAVER  &kp C_AC_PRINT &kp C_PAUSE  &kp K_VOL_UP &none   &none   &none   &kp F11    &kp F12   &bootloader                                                                                   
-&none    &kp F1         &kp F2        &kp F3     &kp F4     &kp F5     &kp F6     &kp F7     &kp F8    &kp F9  &kp F10 &kp DEL
-&kp CAPSLOCK    &kp Q          &kp W         &kp E      &kp R      &kp T      &kp Y      &kp PAGE_UP      &kp INSERT     &kp O   &kp P
-&none    &kp A          &kp S         &kp D      &kp F      &kp G      &kp HOME      &kp END      &kp PAGE_DOWN     &kp L   &none &none         
-&none    &kp Z          &kp X         &kp C      &kp V      &kp B      &kp N      &kp M      &kp C_BRI_DN &kp C_BRI_UP &kp RSHFT
-  &none  &kp LCTRL               &kp LGUI             &bl BL_TOG           &mo SYM         &mo SYM     &mo UPPER           
-
+            &kp LEFT                  &mkp LCLK      &mkp RCLK     &kp Y       &kp X
+&kp K_VOL_UP  &kp K_VOL_DN  &kp RIGHT                &mkp RCLK                 &kp B       &kp A
+&kp C_AL_SCREENSAVER  &kp C_AC_PRINT  &kp C_PAUSE  &kp C_MUTE  &none  &none  &none  &kp F11  &kp F12  &bootloader
+&none      &kp F1   &kp F2   &kp F3   &kp F4   &kp F5   &kp F6   &kp F7   &kp F8     &kp F9   &kp F10  &kp DEL
+&kp CAPSLOCK  &kp Q  &kp W   &kp E    &kp R    &kp T    &kp Y    &kp PAGE_UP  &kp INSERT  &kp O  &kp P
+&none      &kp A    &kp S    &kp D    &kp F    &kp G    &kp HOME &kp END  &kp PAGE_DOWN  &kp L  &none  &none
+&none      &kp Z    &kp X    &kp C    &kp V    &kp B    &kp N    &kp M    &kp C_BRI_DN  &kp C_BRI_UP  &kp RSHFT
+  &none    &kp LCTRL         &kp LGUI          &bl BL_TOG        &kp RALT       &kp RCTRL   &mo BOTH
             >;
         };
 
-
+        // Right Fn
         upper_layer {
-
             bindings = <
-        &kp LEFT                      &mkp LCLK         &mkp RCLK      &kp Y   &kp X 
-&kp UP   &kp DOWN &kp RIGHT               &mkp RCLK                       &kp  B      &kp A
-&bt BT_CLR  &kp C_AC_PRINT &kp C_PAUSE  &kp K_VOL_DN &none   &none   &none   &kp F11    &kp F12   &bootloader                                                                                   
-&none     &bt BT_SEL 0          &bt BT_SEL 1         &bt BT_SEL 2      &bt BT_SEL 3     &kp F5     &kp F6     &kp F7     &kp F8    &kp F9  &kp F10 &kp DEL
-&kp CAPSLOCK    &kp Q          &kp W         &kp E      &kp R      &kp T      &kp Y      &kp PAGE_UP      &kp INSERT     &kp O   &kp P
-&none    &kp A          &kp S         &kp D      &kp F      &kp G      &kp HOME      &kp END      &kp PAGE_DOWN     &kp L   &none &none         
-&none    &kp Z          &kp X         &kp C      &kp V      &kp B      &kp N      &kp M      &kp C_BRI_DN &kp C_BRI_UP &kp RSHFT
-  &sys_reset  &kp LCTRL               &kp LALT             &bl BL_TOG           &mo SYM         &none     &none           
-
+            &kp LEFT                  &mkp LCLK      &mkp RCLK     &kp Y       &kp X
+&kp UP   &kp DOWN  &kp RIGHT                        &mkp RCLK                 &kp B       &kp A
+&out OUT_TOG  &kp C_AC_PRINT  &kp C_PAUSE  &kp C_MUTE  &none  &none  &none  &kp F11  &kp F12  &bootloader
+&none      &bt BT_SEL 0  &bt BT_SEL 1  &bt BT_SEL 2  &bt BT_SEL 3  &kp F5  &kp F6  &kp F7  &kp F8  &kp F9  &kp F10  &kp DEL
+&kp CAPSLOCK  &kp Q  &kp W   &kp E    &kp R    &kp T    &kp Y    &kp PAGE_UP  &kp INSERT  &kp O  &kp P
+&none      &kp A    &kp S    &kp D    &kp F    &kp G    &kp HOME &kp END  &kp PAGE_DOWN  &kp L  &none  &none
+&none      &kp Z    &kp X    &kp C    &kp V    &kp B    &kp N    &kp M    &kp C_BRI_DN  &kp C_BRI_UP  &kp RSHFT
+  &mo BOTH &kp LCTRL         &kp LALT          &bl BL_TOG        &kp RALT       &kp RCTRL   &none
             >;
         };
 
+        // Both Fn keys: the dangerous things. Everything else falls through.
+        both_layer {
+            bindings = <
+            &trans                    &trans         &trans        &trans      &trans
+&trans   &trans    &trans                           &trans                    &trans      &trans
+&bt BT_CLR  &trans  &trans  &trans  &trans  &trans  &trans  &trans  &trans  &bootloader
+&trans     &trans   &trans   &trans   &trans   &trans   &trans   &trans   &trans     &trans   &trans   &trans
+&trans     &trans   &trans   &trans   &sys_reset  &trans  &trans  &trans  &trans    &trans   &trans
+&trans     &trans   &trans   &trans   &trans   &trans   &trans   &trans   &trans     &trans   &trans   &trans
+&trans     &trans   &trans   &trans   &trans   &trans   &trans   &trans   &trans     &trans   &trans
+  &trans   &trans            &trans            &trans            &trans         &trans      &trans
+            >;
+        };
     };
 };
-

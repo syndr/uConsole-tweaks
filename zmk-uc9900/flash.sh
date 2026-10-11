@@ -103,6 +103,10 @@ write_image() {
         echo "error: still in the bootloader; the image was not accepted. Run this again with a known-good image." >&2
     else
         echo "error: the keyboard did not come back after flashing" >&2
+        if dmesg 2>/dev/null | tail -40 | grep -q -E 'error -71|device not accepting address'; then
+            echo "  dmesg shows USB enumeration errors: the uConsole's host port is stuck, not the keyboard." >&2
+            echo "  See 'Recovery' in zmk-uc9900/README.md (toggle the hub port, re-bind the hub, or reboot)." >&2
+        fi
     fi
     return 1
 }

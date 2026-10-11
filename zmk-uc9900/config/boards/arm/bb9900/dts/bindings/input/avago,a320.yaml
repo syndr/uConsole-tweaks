@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+
+description: |
+  Avago (Broadcom) ADBS-A320 optical finger navigation sensor on I2C, read by
+  polling. Reports INPUT_REL_X / INPUT_REL_Y through the input subsystem.
+
+compatible: "avago,a320"
+
+include: i2c-device.yaml

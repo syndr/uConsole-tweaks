@@ -1,0 +1,35 @@
+/*
+ * Copyright (c) 2023 ZitaoTech
+ * SPDX-License-Identifier: MIT
+ */
+
+&pinctrl {
+    i2c0_default: i2c0_default {
+        group1 {
+            psels = <NRF_PSEL(TWIM_SDA, 0, 22)>,
+                <NRF_PSEL(TWIM_SCL, 1, 00)>;
+        };
+    };
+
+    i2c0_sleep: i2c0_sleep {
+        group1 {
+            psels = <NRF_PSEL(TWIM_SDA, 0, 22)>,
+                <NRF_PSEL(TWIM_SCL, 1, 00)>;
+            low-power-enable;
+        };
+    };
+
+    /* Keyboard backlight */
+    pwm1_default: pwm1_default {
+        group1 {
+            psels = <NRF_PSEL(PWM_OUT0, 0, 9)>;
+        };
+    };
+
+    pwm1_sleep: pwm1_sleep {
+        group1 {
+            psels = <NRF_PSEL(PWM_OUT0, 0, 9)>;
+            bias-pull-down;
+        };
+    };
+};
