@@ -34,7 +34,9 @@ HI_RES_PER_NOTCH = 120  # Linux kernel convention: 120 hi-res units = 1 legacy n
 # 1 = pointer-direction matches scroll-direction (push pointer down → scroll down)
 # -1 = inverted
 DIR_V = 1
-DIR_H = 1
+# evdev's positive horizontal wheel means "scroll right", which moves the content
+# LEFT; -1 makes the content follow the finger on this axis too.
+DIR_H = -1
 
 
 def _scan(match):

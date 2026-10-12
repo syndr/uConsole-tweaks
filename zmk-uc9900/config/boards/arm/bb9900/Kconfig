@@ -1,0 +1,69 @@
+# Copyright (c) 2023 ZitaoTech
+# SPDX-License-Identifier: MIT
+
+config BOARD_ENABLE_DCDC
+    bool "Enable DCDC mode"
+    select SOC_DCDC_NRF52X
+    default y
+    depends on BOARD_BB9900
+
+menu "uc9900 trackpad"
+    depends on BOARD_BB9900
+
+config INPUT_A320
+    bool "Avago A320 optical sensor (I2C, polled)"
+    default y
+    depends on DT_HAS_AVAGO_A320_ENABLED
+    depends on I2C && INPUT
+    help
+      Polls the ADBS-A320 finger-navigation sensor behind the trackpad and
+      reports relative X/Y through Zephyr's input subsystem. The board has no
+      motion-interrupt line, hence polling.
+
+if INPUT_A320
+
+config INPUT_A320_POLL_INTERVAL_MS
+    int "Poll interval in milliseconds"
+    range 1 50
+    default 4
+    help
+      The vendor firmware polled every 2 ms. USB reports go out at most every
+      millisecond, so shorter intervals only cost I2C traffic.
+
+config INPUT_A320_INIT_PRIORITY
+    int "Driver init priority"
+    default 90
+
+config INPUT_A320_OFN_ENGINE
+    hex "Value written to the sensor's OFN_Engine register (0x60)"
+    default 0x00
+    help
+      The sensor's finger-navigation features are off after power-up. 0xA0
+      enables assert/de-assert (the sensor stops reporting as the finger
+      lifts, which can stop the pointer jumping on lift-off) but was found to
+      reject a bare finger on some trackpads. The register is written at
+      every start, even when 0x00, because the sensor keeps whatever an
+      earlier firmware wrote.
+
+endif # INPUT_A320
+
+config UC9900_SCROLL_LAYER
+    int "Keymap layer that puts the trackpad into scroll mode"
+    default 4
+    help
+      Must match the SCROLL layer number in bb9900.keymap. Used by the Caps
+      Lock glue and the trackpad light.
+
+config UC9900_CAPS_SCROLL
+    bool "Host Caps Lock switches the trackpad into scroll mode"
+    default y
+    depends on ZMK_HID_INDICATORS
+    help
+      Activates the scroll layer while the host reports Caps Lock on, as the
+      vendor firmware did, sharing direction and speed with hold-Select.
+
+config UC9900_SCROLL_LIGHT
+    bool "Trackpad light off while scroll mode is active"
+    default y
+
+endmenu

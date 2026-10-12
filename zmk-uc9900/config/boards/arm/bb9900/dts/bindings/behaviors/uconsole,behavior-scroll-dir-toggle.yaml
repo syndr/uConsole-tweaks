@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MIT
+
+description: Toggle the trackpad scroll direction (natural / inverted) and remember it
+
+compatible: "uconsole,behavior-scroll-dir-toggle"
+
+include: zero_param.yaml

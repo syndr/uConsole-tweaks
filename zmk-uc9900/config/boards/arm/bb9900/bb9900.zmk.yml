@@ -1,0 +1,12 @@
+file_format: "1"
+id: bb9900
+name: uConsole Trackpad Keyboard (uc9900)
+type: board
+arch: arm
+features:
+  - keys
+  - backlight
+outputs:
+  - usb
+  - ble
+url: https://github.com/Bill-lulu/uc9900

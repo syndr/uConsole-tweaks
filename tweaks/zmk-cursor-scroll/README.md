@@ -18,7 +18,7 @@ Edit the module-level constants at the top of `zmk-cursor-scroll`:
 | --- | --- |
 | `PIXELS_PER_TICK_V` / `PIXELS_PER_TICK_H` | Pointer pixels per emitted **legacy notch**. Hi-res events fire continuously in between (one hi-res unit every `PIXELS_PER_TICK / HI_RES_PER_NOTCH` pixels of motion). Larger = slower scrolling on both axes. |
 | `HI_RES_PER_NOTCH` | Kernel-fixed ratio of hi-res units per legacy notch (`120`). **Do not change** — modern compositors hard-code this value. |
-| `DIR_V` / `DIR_H` | `1` for natural direction (push down → scroll down), `-1` to invert. |
+| `DIR_V` / `DIR_H` | Sign of each axis. The defaults (`1` / `-1`) make the content follow the finger on both axes; flip a sign to invert that axis. |
 | `HOLD_KEY` | The keycode that activates scroll mode. Defaults to `ecodes.KEY_F19` — emitted by [`keyd-uconsole`](../keyd-uconsole) when gamepad Select is held >200 ms. If you change this, you'll also need to adjust the keyd bindings. Avoid `F21`–`F24`: the gamepad face buttons send those. |
 | `KEYD_VID` / `KEYD_PID` | keyd virtual keyboard vendor / product (`0x0FAC` / `0x0ADE`). |
 | `ZMK_VID` / `ZMK_PID` | ZMK device vendor / product (`0x1D50` / `0x615E`). |

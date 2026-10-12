@@ -1,0 +1,38 @@
+# Copyright (c) 2023 ZitaoTech
+# SPDX-License-Identifier: MIT
+
+CONFIG_SOC_SERIES_NRF52X=y
+CONFIG_SOC_NRF52840_QIAA=y
+CONFIG_BOARD_BB9900=y
+
+# Enable MPU
+CONFIG_ARM_MPU=y
+
+CONFIG_PINCTRL=y
+
+# enable GPIO
+CONFIG_GPIO=y
+
+# Build Configuration
+CONFIG_USE_DT_CODE_PARTITION=y
+CONFIG_BUILD_OUTPUT_UF2=y
+
+# Flash configuration
+CONFIG_MPU_ALLOW_FLASH_WRITE=y
+CONFIG_NVS=y
+CONFIG_SETTINGS_NVS=y
+CONFIG_FLASH=y
+CONFIG_FLASH_PAGE_LAYOUT=y
+CONFIG_FLASH_MAP=y
+
+# Enable Signal Power Plus
+CONFIG_BT_CTLR_TX_PWR_PLUS_8=y
+
+# The board has no 32 kHz crystal: run the low-frequency clock from the RC
+# oscillator (from the vendor config).
+CONFIG_CLOCK_CONTROL_NRF=y
+CONFIG_CLOCK_CONTROL_NRF_K32SRC_XTAL=n
+CONFIG_CLOCK_CONTROL_NRF_K32SRC_RC=y
+
+# Trackpad sensor on I2C0
+CONFIG_I2C=y
