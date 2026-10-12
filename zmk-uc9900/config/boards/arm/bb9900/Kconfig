@@ -66,4 +66,40 @@ config UC9900_SCROLL_LIGHT
     bool "Trackpad light off while scroll mode is active"
     default y
 
+config UC9900_TRACKPAD_LIGHT_IDLE_OFF
+    bool "Trackpad light off while the keyboard is idle"
+    default y
+    help
+      Off when ZMK's activity state leaves ACTIVE (after
+      CONFIG_ZMK_IDLE_TIMEOUT without a key or trackpad touch), back on with
+      the next key or touch.
+
+config UC9900_HOST_SLEEP
+    bool "Go dark and quiet while the host is asleep"
+    default y
+    depends on ZMK_HID_INDICATORS
+    help
+      The host signals sleep by setting a bit of the HID LED output report
+      (the uConsole-sleep service uses Kana) and by suspending the USB link.
+      While asleep: a layer of &none on top (no HID reports, no USB remote
+      wakeup), trackpad polling stopped, backlight and trackpad light off.
+
+if UC9900_HOST_SLEEP
+
+config UC9900_HOST_SLEEP_LED_BIT
+    int "HID LED report bit that means 'host asleep'"
+    range 0 7
+    default 4
+    help
+      0 Num Lock, 1 Caps Lock, 2 Scroll Lock, 3 Compose, 4 Kana.
+
+config UC9900_HOST_SLEEP_LAYER
+    int "Keymap layer activated while the host is asleep"
+    default 6
+    help
+      Must match the HOSTSLEEP layer number in bb9900.keymap: every position
+      &none, above all other layers.
+
+endif # UC9900_HOST_SLEEP
+
 endmenu

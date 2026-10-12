@@ -45,6 +45,12 @@ Switching the output to Bluetooth makes the keyboard drive the paired device ins
 
 Scrolling is done in the firmware, so the [`zmk-cursor-scroll`](../tweaks/zmk-cursor-scroll) daemon is not needed with this build (it stays idle if left running: the firmware never sends the F19 it listens for). All three ways in, hold Select, Caps Lock and the Fn+`/` switch, share one scroll layer, so they scroll the same way and at the same speed. The trackpad light goes out while scrolling. Scrolling is smooth: the firmware enables the HID resolution multiplier and Linux turns it into high-resolution wheel events, so Firefox and VS Code scroll too, which jhob101's coarse implementation could not do. The default direction is natural on both axes (the content follows the finger); Fn+`'` flips it and the choice is stored on the keyboard. Speed is set by `SCROLL_MUL`/`SCROLL_DIV` at the top of the keymap (3/8 ≈ the daemon's 64 pointer pixels per notch).
 
+### Lights and host sleep
+
+The trackpad light is on while the keyboard is in use. It goes out in scroll mode, after the keyboard has been idle for `CONFIG_ZMK_IDLE_TIMEOUT` (30 s; a key or a touch relights it), and while the host is asleep. The keyboard backlight (Fn+Space) keeps ZMK's own idle auto-off.
+
+**Host sleep.** The [uConsole-sleep](https://github.com/syndr/uConsole-sleep) service tells the keyboard when the uConsole goes to sleep: it sets the Kana bit (bit 4) of the standard HID LED output report, then suspends the keyboard's USB link; on wake it resumes the link and clears the bit. Either cue puts the firmware into host-sleep mode: a layer of `&none` goes on top so no key or pointer report (and no USB remote-wakeup request) is sent, the trackpad is no longer polled and drops into the sensor's own rest mode, and both lights are off and stay off even if keys are pressed. Everything returns to its previous state on wake; the backlight is driven directly for this, so its own on/off setting is untouched. Any host can use the same signal by writing the LED report (`CONFIG_UC9900_HOST_SLEEP_LED_BIT` picks the bit). Power to the trackpad sensor (P0.13, `ext_power`) is left on: what else it feeds is undocumented.
+
 Not carried over from the vendor firmware: the layer-indicator LED on P0.03 is not driven.
 
 ## Build
