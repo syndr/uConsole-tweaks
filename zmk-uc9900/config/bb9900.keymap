@@ -47,7 +47,12 @@
 #define SCROLL 4   // trackpad scrolls (keep CONFIG_UC9900_SCROLL_LAYER in step)
 #define MOUSE  5   // D-pad moves the pointer
 
-/* Scroll speed: raw sensor units are multiplied by SCROLL_MUL/SCROLL_DIV before
+/* Scroll direction: a positive vertical wheel moves the content down and a
+ * positive horizontal wheel moves it LEFT (evdev's "scroll right"), so the
+ * horizontal axis is inverted to make the content follow the finger on both
+ * axes. &scroll_dir (Fn+') then flips both together.
+ *
+ * Scroll speed: raw sensor units are multiplied by SCROLL_MUL/SCROLL_DIV before
  * the host's resolution multiplier (16 units per notch). 3/8 gives one notch
  * per ~43 sensor units, the same as the zmk-cursor-scroll daemon's 64 pointer
  * pixels. */
@@ -59,6 +64,7 @@
         layers = <SCROLL>;
         input-processors = <&zip_xy_transform INPUT_TRANSFORM_XY_SWAP>,
                            <&zip_xy_to_scroll_mapper>,
+                           <&zip_scroll_transform INPUT_TRANSFORM_X_INVERT>,
                            <&scroll_dir>,
                            <&zip_scroll_scaler SCROLL_MUL SCROLL_DIV>;
     };
