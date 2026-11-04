@@ -12,6 +12,18 @@
  * "default-brightness" (written for the 0-9 scale) so boot brightness is
  * unchanged.
  *
+ * Resync rule: the stock driver (as shipped in the ClockworkPi kernel
+ * packages) runs the shutdown + detect sequence before EVERY write, which
+ * blanks the LED for ~3 ms per change but also means a chip that has dropped
+ * out of 1-wire mode is recovered by the next write. Upstream commit
+ * 8385d8d31 ("only re-enter 1-wire mode on cold start") streams bare frames
+ * instead and only resets on 0 -> N; flicker-free, but if the chip ever
+ * leaves 1-wire mode (control line held low > ~2.5 ms) every later frame is
+ * ignored and the panel stays dark. This build keeps the streaming for
+ * back-to-back writes (key repeat) and re-enters 1-wire mode when the
+ * previous write is more than RESYNC_IDLE_MS old, so the first press after
+ * a pause resynchronises the chip the way the stock driver did.
+ *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
@@ -49,6 +61,7 @@ struct ocp8178_backlight {
 	int def_value;
 	int current_value;
 	bool onewire_ready;
+	unsigned long last_write;	/* jiffies of the last frame sent */
 };
 
 #define DETECT_DELAY 200
@@ -62,6 +75,8 @@ struct ocp8178_backlight {
 #define HIGH_BIT_HIGH_TIME 50
 #define HIGH_BIT_LOW_TIME 10
 #define MAX_BRIGHTNESS_VALUE 31
+/* Writes further apart than this re-enter 1-wire mode first (see header). */
+#define RESYNC_IDLE_MS 1000
 /* Scale the stock driver used for userspace and for "default-brightness". */
 #define LEGACY_MAX_BRIGHTNESS_VALUE 9
 
@@ -146,6 +161,7 @@ static int ocp8178_update_status(struct backlight_device *bl)
 {
 	struct ocp8178_backlight *gbl = bl_get_data(bl);
 	int brightness = bl->props.brightness;
+	bool resync;
 
 	if (bl->props.power != FB_BLANK_UNBLANK ||
 	    bl->props.state & (BL_CORE_SUSPENDED | BL_CORE_FBBLANK))
@@ -168,9 +184,18 @@ static int ocp8178_update_status(struct backlight_device *bl)
 	 * blanked state (cold start, DPMS unblank, resume), where the chip may
 	 * have dropped out of 1-wire mode.  There the LED is dark anyway, so the
 	 * reset is invisible.  Steady-state changes just stream a frame.
+	 *
+	 * uConsole-tweaks: also re-detect when the previous frame is older than
+	 * RESYNC_IDLE_MS. Key repeat and slider drags stay flicker-free (frames
+	 * arrive well inside the window); the first write after a pause pays
+	 * one ~3 ms reset and recovers a chip that silently left 1-wire mode.
 	 */
-	if (!gbl->onewire_ready ||
-	    (gbl->current_value == 0 && brightness != 0)) {
+	resync = !gbl->onewire_ready ||
+		 (gbl->current_value == 0 && brightness != 0) ||
+		 time_after(jiffies,
+			    gbl->last_write + msecs_to_jiffies(RESYNC_IDLE_MS));
+
+	if (resync) {
 		entry_1wire_mode(gbl);
 		write_byte(gbl, brightness);
 		entry_1wire_mode(gbl);
@@ -181,6 +206,7 @@ static int ocp8178_update_status(struct backlight_device *bl)
 	}
 
 	gbl->current_value = brightness;
+	gbl->last_write = jiffies;
 
 	return 0;
 }

@@ -116,7 +116,8 @@ systemctl enable --now zmk-cursor-scroll.service
 dkms add -m @DKMS_NAME@ -v @VERSION@ >/dev/null 2>&1 || true
 if dkms install -m @DKMS_NAME@ -v @VERSION@ -k "$(uname -r)"; then
     echo "ocp8178-backlight: module built for $(uname -r)."
-    echo "  Activate with a reboot, or: sudo modprobe -r ocp8178_bl && sudo modprobe ocp8178_bl"
+    echo "  Reboot to activate. Do not modprobe -r/modprobe it live: the panel driver keeps"
+    echo "  its reference to the old backlight device and DPMS would leave the screen dark."
 else
     echo "ocp8178-backlight: DKMS build failed (are linux-headers-$(uname -r) installed?)." >&2
     echo "  Re-run later with: sudo dkms install @DKMS_NAME@/@VERSION@" >&2

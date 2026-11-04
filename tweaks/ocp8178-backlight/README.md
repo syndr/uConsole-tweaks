@@ -8,6 +8,8 @@ The OCP8178 takes a 5-bit level (0–31) over its one-wire interface. The Clockw
 
 This tweak is the same driver source with `max_brightness = 31` and the value sent to the chip as-is. The device tree's `default-brightness` (written on the 0–9 scale, `5` in the uConsole overlays) is still translated through the old table, so the panel comes up at the same level it always did (`5` → `16` of 31).
 
+One behavioural difference from the stock module, on purpose. The stock driver resets the chip (a ~3 ms LED-off shutdown + detect sequence) before every write, which strobes under key repeat but also recovers a chip that has dropped out of its 1-wire mode. The upstream branch has since switched to streaming bare frames and only resetting when coming from off, which is flicker-free but cannot recover if the chip ever leaves 1-wire mode. This build does both: writes that arrive within a second of the previous one are streamed, and the first write after a longer pause re-enters 1-wire mode first. Holding a brightness key is smooth; the first press after a pause may show a barely visible blink.
+
 Source: `drivers/video/backlight/ocp8178_bl.c` from [ak-rex/ClockworkPi-linux](https://github.com/ak-rex/ClockworkPi-linux) (`rpi-7.1.y`), GPL-2.0.
 
 ## How it is installed
@@ -18,14 +20,11 @@ Requirements: `dkms` (declared dependency) and the headers for the running kerne
 
 ## Activating it
 
-The new module is used on the next boot. To switch without rebooting:
+**Reboot.** Do not unload and reload the module on a running system: the panel driver (`panel-cwu50`) looks its backlight device up once at probe and keeps that reference. After a `modprobe -r` / `modprobe` cycle the panel's DPMS off/on drives the old, unregistered device and never reaches the new one, so the next screen blank leaves the panel dark until a reboot.
 
 ```sh
-sudo modprobe -r ocp8178_bl && sudo modprobe ocp8178_bl
-cat /sys/class/backlight/backlight@0/max_brightness   # 31
+cat /sys/class/backlight/backlight@0/max_brightness   # 31 after the reboot
 ```
-
-Expect a brief blink: unloading releases the control line and the panel resets to the default level when the module probes again.
 
 `systemd-backlight` saves the raw level at shutdown and restores it at boot. The first boot after switching restores a value saved on the 0–9 scale, so the panel may come up dim once; press brightness-up and it saves the new scale from then on.
 
@@ -39,7 +38,7 @@ for i in $(seq 1 31); do brightnessctl set $i; sleep 0.1; done
 
 ## Reverting
 
-`sudo dpkg -r uconsole-tweaks` removes the DKMS module; the stock driver is used again after a reboot (or a `modprobe -r`/`modprobe` cycle). To keep the package but drop just this module: `sudo dkms remove ocp8178-backlight/<version> --all`.
+`sudo dpkg -r uconsole-tweaks` removes the DKMS module; the stock driver is used again after a reboot. To keep the package but drop just this module: `sudo dkms remove ocp8178-backlight/<version> --all`, then reboot.
 
 ## Pairing
 
