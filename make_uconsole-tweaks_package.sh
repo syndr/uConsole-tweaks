@@ -4,7 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STAGE="$SCRIPT_DIR/uconsole-tweaks"
-VERSION="${ENV_VERSION:-0.3.1}"
+VERSION="${ENV_VERSION:-0.4.0}"
+DKMS_NAME="ocp8178-backlight"
 
 rm -rf "$STAGE"
 mkdir -p "$STAGE/DEBIAN"
@@ -13,6 +14,7 @@ mkdir -p "$STAGE/etc/systemd/system"
 mkdir -p "$STAGE/etc/keyd"
 mkdir -p "$STAGE/usr/local/share/applications"
 mkdir -p "$STAGE/usr/local/share/uconsole-tweaks/camera"
+mkdir -p "$STAGE/usr/src/$DKMS_NAME-$VERSION"
 
 # --- zmk-cursor-scroll --------------------------------------------------------
 
@@ -49,6 +51,18 @@ install -m 0644 "$SCRIPT_DIR/tweaks/camera/LICENSE.picamera2" \
 install -m 0644 "$SCRIPT_DIR/tweaks/camera/uconsole-camera.desktop" \
     "$STAGE/usr/local/share/applications/uconsole-camera.desktop"
 
+# --- ocp8178-backlight (DKMS) -------------------------------------------------
+
+install -m 0644 "$SCRIPT_DIR/tweaks/ocp8178-backlight/ocp8178_bl.c" \
+    "$STAGE/usr/src/$DKMS_NAME-$VERSION/ocp8178_bl.c"
+
+install -m 0644 "$SCRIPT_DIR/tweaks/ocp8178-backlight/Makefile" \
+    "$STAGE/usr/src/$DKMS_NAME-$VERSION/Makefile"
+
+sed "s/@VERSION@/$VERSION/" "$SCRIPT_DIR/tweaks/ocp8178-backlight/dkms.conf" \
+    > "$STAGE/usr/src/$DKMS_NAME-$VERSION/dkms.conf"
+chmod 0644 "$STAGE/usr/src/$DKMS_NAME-$VERSION/dkms.conf"
+
 # --- DEBIAN/conffiles ---------------------------------------------------------
 
 cat << 'EOF' > "$STAGE/DEBIAN/conffiles"
@@ -62,7 +76,7 @@ Package: uconsole-tweaks
 Version: $VERSION
 Maintainer: syndr <syndr@ultroncore.net>
 Architecture: all
-Depends: python3, python3-evdev, keyd
+Depends: python3, python3-evdev, keyd, dkms
 Recommends: python3-picamera2, python3-pyqt5, python3-opengl, python3-opencv
 Suggests: wl-clipboard, xclip
 Description: Small standalone tweaks for the ClockworkPi uConsole.
@@ -79,6 +93,9 @@ Description: Small standalone tweaks for the ClockworkPi uConsole.
    * camera - uconsole-camera, a Picamera2 camera app for a CSI camera
      module, laid out for the uConsole's 1280x720 screen (forked from
      Picamera2's app_full.py).
+   * ocp8178-backlight - DKMS build of the backlight driver exposing all 32
+     levels of the OCP8178 instead of the stock driver's 10. Needs the
+     running kernel's headers (linux-headers-<version>).
 EOF
 
 # --- DEBIAN/postinst ----------------------------------------------------------
@@ -94,7 +111,18 @@ if systemctl is-active --quiet keyd; then
 fi
 
 systemctl enable --now zmk-cursor-scroll.service
+
+# ocp8178-backlight: register and build the DKMS module for the running kernel.
+dkms add -m @DKMS_NAME@ -v @VERSION@ >/dev/null 2>&1 || true
+if dkms install -m @DKMS_NAME@ -v @VERSION@ -k "$(uname -r)"; then
+    echo "ocp8178-backlight: module built for $(uname -r)."
+    echo "  Activate with a reboot, or: sudo modprobe -r ocp8178_bl && sudo modprobe ocp8178_bl"
+else
+    echo "ocp8178-backlight: DKMS build failed (are linux-headers-$(uname -r) installed?)." >&2
+    echo "  Re-run later with: sudo dkms install @DKMS_NAME@/@VERSION@" >&2
+fi
 EOF
+sed -i "s/@DKMS_NAME@/$DKMS_NAME/g; s/@VERSION@/$VERSION/g" "$STAGE/DEBIAN/postinst"
 
 # --- DEBIAN/prerm -------------------------------------------------------------
 
@@ -105,7 +133,14 @@ set -e
 if systemctl list-unit-files zmk-cursor-scroll.service >/dev/null 2>&1; then
     systemctl disable --now zmk-cursor-scroll.service || true
 fi
+
+# ocp8178-backlight: drop the DKMS module; the stock driver is used after the
+# next reboot (or a modprobe -r / modprobe cycle).
+if command -v dkms >/dev/null 2>&1; then
+    dkms remove -m @DKMS_NAME@ -v @VERSION@ --all >/dev/null 2>&1 || true
+fi
 EOF
+sed -i "s/@DKMS_NAME@/$DKMS_NAME/g; s/@VERSION@/$VERSION/g" "$STAGE/DEBIAN/prerm"
 
 # --- DEBIAN/postrm ------------------------------------------------------------
 

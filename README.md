@@ -15,6 +15,7 @@ For larger systems built around uConsole-specific behavior (sleep / power manage
 | [`zmk-cursor-scroll`](tweaks/zmk-cursor-scroll) | While the gamepad `Select` key is held, the trackball drives the scroll wheel instead of the cursor. |
 | [`keyd-uconsole`](tweaks/keyd-uconsole) | keyd config scoped to the ZMK keyboard sub-device — maps Tab (hold) → Super, and is what enables the keyd virtual keyboard that `zmk-cursor-scroll` depends on. |
 | [`battery-gauge`](tweaks/battery-gauge) | `uconsole-battery`, a voltage-based state-of-charge estimator that works around the AXP223 PMIC's stuck fuel-gauge register (kernel `capacity` pinned at 100%). Feeds a waybar custom module. |
+| [`ocp8178-backlight`](tweaks/ocp8178-backlight) | DKMS build of the backlight driver that exposes all 32 brightness levels of the OCP8178 instead of the stock driver's 10, so the brightness keys step ~3% instead of ~11%. |
 | [`camera`](tweaks/camera) | `uconsole-camera`, a camera app for a CSI camera module laid out for the 1280x720 screen (forked from Picamera2's `app_full.py`) — full-resolution stills, HDR, video, autofocus, exposure / white balance, digital zoom, save location and remembered preferences. |
 
 ## Install
@@ -23,7 +24,7 @@ For larger systems built around uConsole-specific behavior (sleep / power manage
 make install      # builds uconsole-tweaks.deb and runs `apt install -y ./uconsole-tweaks.deb`
 ```
 
-`apt install` of a local deb auto-resolves the declared `Depends:` (currently `python3`, `python3-evdev`, `keyd`), so you don't need a separate `make deps` step. The `camera` tweak's libraries (`python3-picamera2`, `python3-pyqt5`, `python3-opengl`, `python3-opencv`) are `Recommends:`, which `apt` also installs by default.
+`apt install` of a local deb auto-resolves the declared `Depends:` (currently `python3`, `python3-evdev`, `keyd`, `dkms`), so you don't need a separate `make deps` step. The `ocp8178-backlight` module is built by DKMS at install time and needs the running kernel's headers (`linux-headers-$(uname -r)`, from the same ClockworkPi apt repo as the kernel). The `camera` tweak's libraries (`python3-picamera2`, `python3-pyqt5`, `python3-opengl`, `python3-opencv`) are `Recommends:`, which `apt` also installs by default.
 
 To just build the deb without installing:
 

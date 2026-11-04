@@ -1,4 +1,4 @@
-VERSION ?= 0.3.1
+VERSION ?= 0.4.0
 DEB := uconsole-tweaks.deb
 
 SOURCES := $(wildcard tweaks/*/*) make_uconsole-tweaks_package.sh
@@ -28,6 +28,7 @@ clean:
 
 status:
 	systemctl status --no-pager $(addsuffix .service,$(SERVICES))
+	-dkms status ocp8178-backlight
 
 logs:
 	sudo journalctl -f $(addprefix -u ,$(SERVICES))
