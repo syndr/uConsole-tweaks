@@ -5,6 +5,7 @@
 // 2. Merge the block below into that config's top level.
 // 3. Style it in style.css via #custom-uconsole-battery{,.charging,.warning,
 //    .critical,.full} — the same class names the built-in battery module uses.
+// 4. Optional: the CPU profile menu at the end of the block (see the README).
 //
 // The script emits JSON, so `return-type` MUST be "json". It is stateless and
 // cheap; waybar re-runs it every `interval` seconds.
@@ -20,5 +21,17 @@
 		"discharging": "",
 		"warning": "",
 		"critical": ""
-	}
+	},
+	// --- CPU profile menu (needs uconsole-sleep >= 1.8) ----------------------
+	// Uncomment the keys below: left click then opens a menu to pick
+	// Automatic / Performance / Balanced / Power save for this boot.
+	// `uconsole-battery --waybar-menu-snippet` prints the same keys.
+	// "menu": "on-click",
+	// "menu-file": "/usr/share/uconsole-tweaks/waybar-cpu-profile-menu.ui",
+	// "menu-actions": {
+	//     "auto":        "/usr/local/bin/uconsole-battery --set-cpu-profile auto",
+	//     "performance": "/usr/local/bin/uconsole-battery --set-cpu-profile performance",
+	//     "schedutil":   "/usr/local/bin/uconsole-battery --set-cpu-profile schedutil",
+	//     "powersave":   "/usr/local/bin/uconsole-battery --set-cpu-profile powersave"
+	// }
 }

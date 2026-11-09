@@ -14,7 +14,7 @@ For larger systems built around uConsole-specific behavior (sleep / power manage
 | --- | --- |
 | [`zmk-cursor-scroll`](tweaks/zmk-cursor-scroll) | While the gamepad `Select` key is held, the trackball drives the scroll wheel instead of the cursor. |
 | [`keyd-uconsole`](tweaks/keyd-uconsole) | keyd config scoped to the ZMK keyboard sub-device — maps Tab (hold) → Super, and is what enables the keyd virtual keyboard that `zmk-cursor-scroll` depends on. |
-| [`battery-gauge`](tweaks/battery-gauge) | `uconsole-battery`, a battery percentage for a waybar custom module. Shows the AXP223 PMIC's fuel gauge while it is moving, and switches to a voltage-based state-of-charge estimate whenever the gauge is detected stuck (classically kernel `capacity` pinned at 100%). |
+| [`battery-gauge`](tweaks/battery-gauge) | `uconsole-battery`, a battery percentage for a waybar custom module. Shows the AXP223 PMIC's fuel gauge while it is moving, and switches to a voltage-based state-of-charge estimate whenever the gauge is detected stuck (classically kernel `capacity` pinned at 100%). With uConsole-sleep ≥ 1.8 the tooltip also explains the CPU governor, and an optional waybar menu selects a CPU profile for the current boot. |
 | [`ocp8178-backlight`](tweaks/ocp8178-backlight) | DKMS build of the backlight driver that exposes all 32 brightness levels of the OCP8178 instead of the stock driver's 10, so the brightness keys step ~3% instead of ~11%. |
 | [`camera`](tweaks/camera) | `uconsole-camera`, a camera app for a CSI camera module laid out for the 1280x720 screen (forked from Picamera2's `app_full.py`) — full-resolution stills, HDR, video, autofocus, exposure / white balance, digital zoom, save location and remembered preferences. |
 
