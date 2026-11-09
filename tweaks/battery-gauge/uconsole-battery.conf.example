@@ -103,5 +103,11 @@
 # Ignore the kernel gauge entirely (the original behaviour).
 #FORCE_VOLTAGE=false
 
+### WAYBAR_SIGNAL --- [0-30] --- Refresh waybar when a CPU profile is selected
+# After `uconsole-battery --set-cpu-profile`, waybar gets SIGRTMIN+<n>, and a
+# module with `"signal": <n>` re-runs at once. Must match the module's
+# "signal" key and be unused by other modules. 0 turns it off.
+#WAYBAR_SIGNAL=13
+
 ### BATTERY_NAME --- Preferred power-supply name under /sys/class/power_supply
 #BATTERY_NAME=axp20x-battery

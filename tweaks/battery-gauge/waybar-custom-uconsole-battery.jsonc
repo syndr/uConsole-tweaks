@@ -25,7 +25,11 @@
 	// --- CPU profile menu (needs uconsole-sleep >= 1.8) ----------------------
 	// Uncomment the keys below: left click then opens a menu to pick
 	// Automatic / Performance / Balanced / Power save for this boot.
-	// `uconsole-battery --waybar-menu-snippet` prints the same keys.
+	// "signal" makes a selection show at once instead of at the next interval;
+	// it must be a number no other module here uses (WAYBAR_SIGNAL in
+	// uconsole-battery.conf changes it). `uconsole-battery
+	// --waybar-menu-snippet` prints the same keys.
+	// "signal": 13,
 	// "menu": "on-click",
 	// "menu-file": "/usr/share/uconsole-tweaks/waybar-cpu-profile-menu.ui",
 	// "menu-actions": {

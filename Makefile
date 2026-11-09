@@ -1,4 +1,4 @@
-VERSION ?= 0.6.0
+VERSION ?= 0.6.1
 DEB := uconsole-tweaks.deb
 
 SOURCES := $(wildcard tweaks/*/*) make_uconsole-tweaks_package.sh

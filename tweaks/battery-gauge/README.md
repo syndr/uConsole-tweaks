@@ -275,16 +275,24 @@ installs the menu itself, `/usr/share/uconsole-tweaks/waybar-cpu-profile-menu.ui
 only has to point at it:
 
 1. Install uConsole-sleep 1.8 or newer.
-2. Add the `menu`, `menu-file` and `menu-actions` keys to the module: either
+2. Add the `signal`, `menu`, `menu-file` and `menu-actions` keys to the module: either
    uncomment them at the end of
    [`waybar-custom-uconsole-battery.jsonc`](waybar-custom-uconsole-battery.jsonc),
    or paste the output of `uconsole-battery --waybar-menu-snippet` into **each**
    `custom/uconsole-battery…` block of a config you already have. That command
    also says whether uConsole-sleep is detected right now. Reload waybar.
 
-Left click then opens the menu. The tooltip catches up at the module's next
-`interval`. With the keys in place but no uConsole-sleep, the items do nothing
-except raise the "needs uconsole-sleep" notification.
+Left click then opens the menu. With the keys in place but no uConsole-sleep,
+the items do nothing except raise the "needs uconsole-sleep" notification.
+
+The keys include `"signal": 13`. Once a selection is applied,
+`--set-cpu-profile` sends waybar `SIGRTMIN+13`, and a module carrying that
+key re-runs at once, so the tooltip and the `cpu-manual` class do not wait
+for the next `interval`. The number must not be used by another module in
+your config, and a module can have only one `signal` key: if yours already
+has one, or 13 is taken, set `WAYBAR_SIGNAL` in the config file to the number
+to use (0 turns the refresh off) and the snippet follows it. Without the key
+everything still works, one interval late.
 
 For a waybar build without menu support, or for a keybind, there is
 `uconsole-battery-profile-menu`: the same choice through `rofi` or `fuzzel`

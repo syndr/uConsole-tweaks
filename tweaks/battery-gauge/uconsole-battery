@@ -76,6 +76,7 @@ import json
 import math
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -191,6 +192,11 @@ TEXT_FORMAT = "{pct}%"
 # Always display the voltage estimate (ignore the gauge). Mostly for debugging.
 FORCE_VOLTAGE = False
 
+# After --set-cpu-profile, waybar is sent SIGRTMIN+<this> so a module with
+# `"signal": <this>` re-runs the script at once instead of at its next
+# interval. --waybar-menu-snippet prints the matching key. 0 disables both.
+WAYBAR_SIGNAL = 13
+
 # Keys the config file may override, with the type to coerce the value to.
 CONFIG_TYPES = {
     "BATTERY_NAME": str,
@@ -221,6 +227,7 @@ CONFIG_TYPES = {
     "R_LEARN_MIN_SAMPLES": int,
     "TEXT_FORMAT": str,
     "FORCE_VOLTAGE": bool,
+    "WAYBAR_SIGNAL": int,
 }
 
 # Plausibility bounds for a learned internal resistance (ohms).
@@ -1042,6 +1049,44 @@ def cpu_fail(msg, code=1):
     return code
 
 
+def waybar_signal():
+    """The real-time signal number for WAYBAR_SIGNAL, or None when disabled.
+    Waybar does not handle SIGRTMIN+0, hence the lower bound."""
+    n = WAYBAR_SIGNAL
+    if not is_num(n) or not 1 <= n <= signal.SIGRTMAX - signal.SIGRTMIN:
+        return None
+    return signal.SIGRTMIN + int(n)
+
+
+def refresh_waybar():
+    """Make this user's waybar re-run the module now. Returns how many were
+    signalled. An unhandled real-time signal would kill the process, so only
+    a `waybar` that has a handler installed for it gets one."""
+    signum = waybar_signal()
+    if signum is None:
+        return 0
+    sent = 0
+    for stat_dir in glob.glob("/proc/[0-9]*"):
+        try:
+            if os.stat(stat_dir).st_uid != os.getuid():
+                continue
+            if read_text(os.path.join(stat_dir, "comm")) != "waybar":
+                continue
+            caught = 0
+            with open(os.path.join(stat_dir, "status"), "r") as f:
+                for line in f:
+                    if line.startswith("SigCgt:"):
+                        caught = int(line.split()[1], 16)
+                        break
+            if not caught >> (signum - 1) & 1:
+                continue
+            os.kill(int(os.path.basename(stat_dir)), signum)
+            sent += 1
+        except (OSError, ValueError):
+            continue
+    return sent
+
+
 def profile_applied(state, word):
     return (state is not None and state.get("requested") == word
             and (word == "auto" or state.get("governor") == word))
@@ -1061,6 +1106,7 @@ def set_cpu_profile(word):
     if profile_applied(state, word):
         # Already in force; the daemon would not rewrite its state for this.
         print(cpu_text("full", state))
+        refresh_waybar()
         return 0
 
     path = os.path.join(sleep_run_dir(), "cpu-profile")
@@ -1086,6 +1132,7 @@ def set_cpu_profile(word):
         if (profile_applied(state, word) and is_num(state.get("ts"))
                 and state["ts"] >= started):
             print(cpu_text("full", state))
+            refresh_waybar()
             return 0
         time.sleep(0.1)
     return cpu_fail(f"'{word}' was saved but not applied within {CPU_SET_WAIT_S:g} s; "
@@ -1098,7 +1145,12 @@ def menu_snippet(trailing_comma=False):
     actions = ",\n".join(
         f'    {(chr(34) + p + chr(34) + ":"):<{width}} "{exe} --set-cpu-profile {p}"'
         for p in MENU_PROFILES)
-    return ('"menu": "on-click",\n'
+    # "signal" lets --set-cpu-profile refresh the module the moment a profile
+    # is applied (see refresh_waybar).
+    refresh = (f'"signal": {int(WAYBAR_SIGNAL)},\n'
+               if waybar_signal() is not None else "")
+    return (refresh +
+            '"menu": "on-click",\n'
             f'"menu-file": "{menu_file()}",\n'
             '"menu-actions": {\n'
             f"{actions}\n"
@@ -1255,6 +1307,7 @@ def main():
                          "installed; otherwise print nothing and exit 1")
     args = ap.parse_args()
 
+    load_config(debug=args.debug)
     # The CPU profile commands never touch the battery or its state files.
     if args.set_cpu_profile is not None:
         return set_cpu_profile(args.set_cpu_profile)
@@ -1269,7 +1322,6 @@ def main():
         print(cpu_text(cpu_mode, cpu_state))
         return 0
 
-    load_config(debug=args.debug)
     if args.calibration:
         cal = load_calibration()
         print(json.dumps({
