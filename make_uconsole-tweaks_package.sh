@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STAGE="$SCRIPT_DIR/uconsole-tweaks"
-VERSION="${ENV_VERSION:-0.4.0}"
+VERSION="${ENV_VERSION:-0.5.0}"
 DKMS_NAME="ocp8178-backlight"
 
 rm -rf "$STAGE"
@@ -31,6 +31,12 @@ install -m 0755 "$SCRIPT_DIR/tweaks/battery-gauge/uconsole-battery" \
 
 install -m 0755 "$SCRIPT_DIR/tweaks/battery-gauge/uconsole-battery-calibrate" \
     "$STAGE/usr/local/bin/uconsole-battery-calibrate"
+
+# Device-specific overrides live in /etc/uconsole-battery.conf or
+# ~/.config/uconsole-battery.conf; ship only the documented example.
+mkdir -p "$STAGE/usr/share/doc/uconsole-tweaks"
+install -m 0644 "$SCRIPT_DIR/tweaks/battery-gauge/uconsole-battery.conf.example" \
+    "$STAGE/usr/share/doc/uconsole-tweaks/uconsole-battery.conf.example"
 
 # --- keyd-uconsole ------------------------------------------------------------
 
@@ -83,10 +89,11 @@ Description: Small standalone tweaks for the ClockworkPi uConsole.
  Ships:
    * zmk-cursor-scroll - hold the gamepad Select key to make the trackball
      drive the scroll wheel instead of the cursor.
-   * battery-gauge - uconsole-battery, a voltage-based state-of-charge
-     estimator that works around the AXP223 PMIC's stuck fuel-gauge register
-     (kernel capacity pinned at 100%). Includes uconsole-battery-calibrate to
-     measure the pack's internal resistance for the estimator.
+   * battery-gauge - uconsole-battery, a battery percentage for waybar that
+     shows the AXP223 fuel gauge while it is moving and falls back to a
+     voltage-based estimate when the gauge sticks (classically pinned at
+     100%). Includes uconsole-battery-calibrate to measure the pack's
+     internal resistance for the estimator.
    * keyd-uconsole - keyd config scoping to the ZMK keyboard sub-device and
      mapping Tab (hold) -> Super. Also enables the keyd virtual keyboard that
      zmk-cursor-scroll listens on.

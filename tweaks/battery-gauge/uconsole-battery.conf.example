@@ -1,0 +1,107 @@
+###########################################################################
+#                  uconsole-battery configuration file                    #
+###########################################################################
+#
+# Device-specific overrides for /usr/local/bin/uconsole-battery. The script
+# reads, in order, /etc/uconsole-battery.conf and then
+# ~/.config/uconsole-battery.conf ($XDG_CONFIG_HOME/uconsole-battery.conf);
+# a key set in a later file wins. KEY=VALUE, one per line, '#' comments.
+# Every key is optional; the values shown are the package defaults.
+# `uconsole-battery --debug` prints which overrides were applied.
+
+### PACK_CAPACITY_MAH --- [mAh] --- Total pack capacity
+# Only scales STUCK_NO_MOVE_PCT (how much charge may flow before an unchanged
+# gauge is called stuck), so it need not be exact. Default: unset, which reads
+# charge_full_design from sysfs (6700 mAh from the stock device tree, i.e. the
+# stock 2x 18650 pack). Set it if you have fitted other cells, e.g. two
+# 4500 mAh 21700 cells in parallel:
+#PACK_CAPACITY_MAH=9000
+
+### R_INTERNAL_OHMS --- [ohm] --- Pack internal resistance for the voltage estimate
+# The main accuracy lever for the voltage-based estimate. Measure with
+# uconsole-battery-calibrate and put the result here instead of editing the
+# script.
+#R_INTERNAL_OHMS=0.08
+
+### MAX_IR_CORRECTION_V --- [V] --- Clamp on the IR correction
+#MAX_IR_CORRECTION_V=0.35
+
+### EMA_ALPHA --- [0.0~1.0] --- Smoothing of the voltage estimate across runs
+# 1 = no smoothing.
+#EMA_ALPHA=0.5
+
+### WARNING_PCT / CRITICAL_PCT --- [%] --- CSS state thresholds
+#WARNING_PCT=30
+#CRITICAL_PCT=15
+
+### Stuck-gauge detection. The AXP223 gauge is flagged stuck when ANY trips.
+# Reads 100 while discharging and the voltage estimate is below this:
+#STUCK_FULL_MAX_EST_PCT=85
+# Disagrees with the voltage estimate by more than this many points:
+#STUCK_DISAGREE_PCT=25
+# Unchanged while this much of the pack (percent of PACK_CAPACITY_MAH) has
+# flowed in or out since it last moved:
+#STUCK_NO_MOVE_PCT=4.0
+# A stuck gauge is trusted again once it moves (in the direction the status
+# implies) to within this many points of the voltage estimate:
+#RECOVER_AGREE_PCT=12
+# Cap on the time step when integrating current across runs (suspend etc.):
+#MAX_SAMPLE_GAP_S=300
+
+### Runtime estimate (tooltip "Remaining" / "Full in").
+# Time constant of the moving average of |current| the estimate divides by:
+#RUNTIME_TAU_S=300
+# While the gauge is healthy, remaining charge is measured in the gauge's own
+# units: mAh of flow per point it moved, averaged over recent moves with this
+# EMA weight on the newest. Immune to a wrong PACK_CAPACITY_MAH.
+#RATE_ALPHA=0.4
+# Seconds of samples required since the status last changed before a figure
+# is shown:
+#RUNTIME_MIN_SPAN_S=60
+# Hide "Full in" above this percentage (constant-voltage tail):
+#TIME_TO_FULL_MAX_PCT=90
+
+### Capacity learning. Over an uninterrupted discharge with a healthy gauge,
+# integrated current / gauge drop gives the effective pack capacity, saved to
+# $XDG_STATE_HOME/uconsole-battery/capacity.json and used over
+# PACK_CAPACITY_MAH. Delete that file to forget it.
+#LEARN_CAPACITY=true
+# Minimum gauge drop (points) in one session before a value is written:
+#LEARN_MIN_DROP_PCT=30
+
+### Coulomb-count fallback. While the gauge is stuck the display is the last
+# trusted gauge value minus charge flowed since (over the pack capacity). If
+# that drifts further than this from the voltage estimate, re-anchor on the
+# estimate:
+#CC_REANCHOR_PCT=15
+
+### Curve learning. While the gauge is healthy and discharging, learn the
+# offset between it and the voltage estimate per 5-point bin of the estimate,
+# and apply it thereafter (saved in $XDG_STATE_HOME/uconsole-battery/
+# calibration.json; delete to forget).
+#LEARN_CURVE=true
+# Samples a bin needs (one per run) before its offset is trusted:
+#CAL_MIN_SAMPLES=20
+# Clamp on the applied offset, points:
+#CAL_MAX_OFFSET_PCT=15
+
+### Resistance learning. Consecutive discharging samples whose current differs
+# by at least R_LEARN_MIN_DI amps give R = -dV/d|I|; the running mean replaces
+# R_INTERNAL_OHMS once R_LEARN_MIN_SAMPLES steps have been seen.
+#LEARN_RESISTANCE=true
+#R_LEARN_MIN_DI=0.3
+#R_LEARN_MAX_DT_S=90
+#R_LEARN_MIN_SAMPLES=10
+
+### TEXT_FORMAT --- Python str.format --- What the bar shows
+# Fields: {pct} {volt} {amps} {watts} {remaining} {status}. Examples:
+#   {pct}% {volt:.2f}V        -> "61% 3.68V"
+#   {pct}% {remaining}        -> "61% ~3h 05m" (remaining is "" until known)
+#TEXT_FORMAT={pct}%
+
+### FORCE_VOLTAGE --- [true|false] --- Always display the voltage estimate
+# Ignore the kernel gauge entirely (the original behaviour).
+#FORCE_VOLTAGE=false
+
+### BATTERY_NAME --- Preferred power-supply name under /sys/class/power_supply
+#BATTERY_NAME=axp20x-battery
