@@ -46,7 +46,7 @@ That estimate is then used to **judge the kernel gauge**:
 | Gauge judged | Displayed value |
 | --- | --- |
 | healthy | kernel `capacity` (the AXP223 fuel gauge) |
-| stuck | the voltage estimate, until the gauge moves again |
+| stuck | a charge count from the last trusted gauge value (see below), until the gauge moves again |
 
 The gauge is flagged **stuck** when any of these trips:
 
@@ -60,8 +60,57 @@ The gauge is flagged **stuck** when any of these trips:
 
 Once flagged it stays flagged (hysteresis) until the gauge moves to a *new*
 value, in the direction the charge status implies, that lands within
-`RECOVER_AGREE_PCT` (12) points of the voltage estimate. If the `capacity`
-attribute is unreadable the estimate is used outright.
+`RECOVER_AGREE_PCT` (12) points of the current best figure (the charge count
+when there is one, else the voltage estimate). If the `capacity` attribute is
+unreadable the gauge is treated as stuck.
+
+### The fallback: charge counting anchored on the gauge
+
+When the gauge is flagged, the display does not jump to the voltage estimate.
+Every healthy run re-anchors a **coulomb count** at the gauge's value; once the
+gauge sticks, the count continues from that anchor using the integrated
+current and the pack capacity (`last good % − mAh flowed / capacity × 100`).
+That makes the switch-over seamless and keeps the fallback within a point or
+two over hours, where the voltage estimate alone can be ten points off. The
+voltage estimate bounds it: if the two drift more than `CC_REANCHOR_PCT` (15)
+apart the count is re-anchored on the estimate. The count is also lost across
+a sample gap longer than `MAX_SAMPLE_GAP_S` (a suspend, where the current
+drawn is not seen) and when the gauge has been stuck since boot; in both cases
+it is anchored on the voltage estimate instead and counts on from there. The
+tooltip says which: "charge count from last good gauge 61%" or "charge count
+from voltage est 58%".
+
+### Learning from the healthy gauge
+
+Everything the gauge teaches us while it works is persisted under
+`$XDG_STATE_HOME/uconsole-battery/` (`~/.local/state/…`), survives reboots and
+is used from then on. `uconsole-battery --calibration` prints it all; delete
+the files to start over.
+
+- **Pack capacity** (`capacity.json`) — described under *Time on battery,
+  runtime, learned capacity* below. Scales the charge count, the runtime
+  estimate and stuck rule 3.
+- **Curve offsets** (`calibration.json`, `LEARN_CURVE`) — on every healthy
+  discharging run, the difference between the gauge and the raw voltage
+  estimate is fed into a running mean for the estimate's 5-point bin. Once a
+  bin has `CAL_MIN_SAMPLES` (20) samples its offset is applied, interpolated
+  between bins and tapered to zero within 10 points outside the learned range,
+  clamped to ±`CAL_MAX_OFFSET_PCT` (15). This removes the systematic mismatch
+  between the stock Li-ion curve and your cells (on the author's 21700 pack the
+  raw estimate ran 9–14 points low), so the estimate is a better yardstick for
+  stuck detection and a better anchor when there is no gauge to anchor on.
+  Samples with the gauge at 100 or ≤5 are skipped because it saturates there.
+- **Internal resistance** (`calibration.json`, `LEARN_RESISTANCE`) — two
+  consecutive discharging samples less than `R_LEARN_MAX_DT_S` (90 s) apart
+  whose current differs by at least `R_LEARN_MIN_DI` (0.3 A) give
+  `R = −ΔV / Δ|I|`, the same measurement `uconsole-battery-calibrate` makes
+  with a forced load, taken passively from normal use. Values outside
+  0.02–0.40 Ω are rejected; after `R_LEARN_MIN_SAMPLES` (10) steps the running
+  mean replaces `R_INTERNAL_OHMS`. Useful when the pack has been changed and
+  nobody re-ran the calibrate tool.
+
+The tooltip's last line summarises the state: `Calibration: curve offset +9.2
+here (6 bins, 412 samples); R 71 mΩ (learned, 38 steps)`.
 
 The per-run state this needs (last reading, integrated charge flow since it
 last changed, the stuck flag, the EMA of the estimate) lives in
@@ -118,6 +167,7 @@ Output modes:
 | `uconsole-battery --percent` | just the integer, e.g. `27` |
 | `uconsole-battery --text` | `27% (discharging, ~1h 05m left)` |
 | `uconsole-battery --force-voltage` | always display the voltage estimate (the original behaviour) |
+| `uconsole-battery --calibration` | learned capacity, curve offsets and resistance as JSON |
 | `uconsole-battery --debug` | additionally log config overrides, state and the stuck decision to stderr |
 
 The tooltip always shows the raw voltage/current, which source is in use, and
@@ -161,7 +211,7 @@ overrides were applied.
 | Key | Meaning |
 | --- | --- |
 | `PACK_CAPACITY_MAH` | Total pack capacity. Default: unset → `charge_full_design` from sysfs (6700 mAh from the stock device tree). **Set this if you have fitted other cells**, e.g. `9000` for two 4500 mAh 21700s. Used for rule 3 and the runtime estimate until a learned value replaces it. |
-| `R_INTERNAL_OHMS` | **The main accuracy lever for the estimate.** Pack internal resistance used to turn loaded voltage into OCV. Default `0.08`. Too low → pessimistic under load; too high → optimistic. |
+| `R_INTERNAL_OHMS` | Pack internal resistance used to turn loaded voltage into OCV, until a learned value replaces it. Default `0.08`. Too low → pessimistic under load; too high → optimistic. |
 | `MAX_IR_CORRECTION_V` | Clamp on the IR correction so a current spike can't throw the estimate off the curve. Default `0.35`. |
 | `EMA_ALPHA` | Cross-invocation smoothing of the estimate (`1`=none). Default `0.5`. |
 | `STUCK_FULL_MAX_EST_PCT` | Rule 1 threshold. Default `85`. |
@@ -174,6 +224,9 @@ overrides were applied.
 | `TIME_TO_FULL_MAX_PCT` | Hide "Full in" above this. Default `90`. |
 | `LEARN_CAPACITY` | Learn the effective pack capacity from discharge sessions. Default `true`. |
 | `LEARN_MIN_DROP_PCT` | Gauge drop required before a learned value is written. Default `30`. |
+| `CC_REANCHOR_PCT` | Re-anchor the charge count on the voltage estimate when they differ by more than this. Default `15`. |
+| `LEARN_CURVE` / `CAL_MIN_SAMPLES` / `CAL_MAX_OFFSET_PCT` | Curve-offset learning: on/off, samples per bin before use, clamp. Defaults `true` / `20` / `15`. |
+| `LEARN_RESISTANCE` / `R_LEARN_MIN_DI` / `R_LEARN_MAX_DT_S` / `R_LEARN_MIN_SAMPLES` | Resistance learning: on/off, minimum current step (A), maximum sample spacing (s), steps before use. Defaults `true` / `0.3` / `90` / `10`. |
 | `TEXT_FORMAT` | Bar text format, see above. Default `{pct}%`. |
 | `FORCE_VOLTAGE` | `true` to always display the estimate. Default `false`. |
 | `BATTERY_NAME` | Preferred power-supply name. Default `axp20x-battery`; falls back to the first `Battery`-type supply. |
@@ -204,14 +257,15 @@ until the loaded estimate lands on that OCV.
 ## Accuracy caveats
 
 The displayed number is the AXP223 gauge whenever it is judged healthy, so
-normally accuracy is the chip's. The voltage estimate is approximate (roughly
-±10 points), and worst during **heavy charging**: at ~2 A charge current the IR
-correction is large, so the charging estimate is the most sensitive to
-`R_INTERNAL_OHMS`. It is nonetheless dramatically better than a gauge frozen at
-100%, and — crucially — it moves, so low-battery states are actually visible
-while the gauge is stuck. Because the estimate is also the yardstick for rules
-1–2, a badly wrong `R_INTERNAL_OHMS` can make a healthy gauge look stuck (or
-vice versa); the tooltip shows both numbers so you can sanity-check.
+normally accuracy is the chip's. While it is stuck the charge count is good to
+a point or two per hour given a reasonable capacity figure. The raw voltage
+estimate is approximate (roughly ±10 points before curve learning kicks in),
+and worst during **heavy charging**: at ~2 A charge current the IR correction
+is large, so the charging estimate is the most sensitive to the resistance
+value. Because the estimate is the yardstick for rules 1–2 and the anchor of
+last resort, a badly wrong resistance can make a healthy gauge look stuck (or
+vice versa) until the learners correct it; the tooltip shows every number so
+you can sanity-check, and `--calibration` shows what has been learned.
 
 ## Requirements
 

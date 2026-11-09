@@ -65,6 +65,30 @@
 # Minimum gauge drop (points) in one session before a value is written:
 #LEARN_MIN_DROP_PCT=30
 
+### Coulomb-count fallback. While the gauge is stuck the display is the last
+# trusted gauge value minus charge flowed since (over the pack capacity). If
+# that drifts further than this from the voltage estimate, re-anchor on the
+# estimate:
+#CC_REANCHOR_PCT=15
+
+### Curve learning. While the gauge is healthy and discharging, learn the
+# offset between it and the voltage estimate per 5-point bin of the estimate,
+# and apply it thereafter (saved in $XDG_STATE_HOME/uconsole-battery/
+# calibration.json; delete to forget).
+#LEARN_CURVE=true
+# Samples a bin needs (one per run) before its offset is trusted:
+#CAL_MIN_SAMPLES=20
+# Clamp on the applied offset, points:
+#CAL_MAX_OFFSET_PCT=15
+
+### Resistance learning. Consecutive discharging samples whose current differs
+# by at least R_LEARN_MIN_DI amps give R = -dV/d|I|; the running mean replaces
+# R_INTERNAL_OHMS once R_LEARN_MIN_SAMPLES steps have been seen.
+#LEARN_RESISTANCE=true
+#R_LEARN_MIN_DI=0.3
+#R_LEARN_MAX_DT_S=90
+#R_LEARN_MIN_SAMPLES=10
+
 ### TEXT_FORMAT --- Python str.format --- What the bar shows
 # Fields: {pct} {volt} {amps} {watts} {remaining} {status}. Examples:
 #   {pct}% {volt:.2f}V        -> "61% 3.68V"

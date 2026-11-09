@@ -26,12 +26,24 @@ and uses it to judge the kernel gauge:
 changing while a meaningful amount of charge has flowed in or out. Once
 flagged, the gauge is trusted again only after it moves to a plausible value.
 
-On top of that the tooltip reports how long the pack has been discharging (or
-charging), an estimated time remaining / time to full from a smoothed average
-of the measured current, and the pack capacity in use. Capacity is learned:
-over a discharge session the integrated current and the gauge's drop give the
-effective mAh directly, which is persisted in $XDG_STATE_HOME and used in place
-of the configured/device-tree value once enough of a session has been seen.
+While the gauge is stuck the fallback is not the raw voltage estimate but a
+coulomb count anchored at the last trusted gauge value: last good percent
+minus charge flowed since, over the pack capacity. That makes the switch-over
+seamless and keeps the fallback accurate for hours. The voltage estimate bounds
+it (re-anchor if they drift far apart) and takes over when there is no anchor
+(stuck since boot, or the count was lost across a suspend).
+
+Everything the healthy gauge teaches us is persisted in
+$XDG_STATE_HOME/uconsole-battery/ and used from then on:
+  * pack capacity   - integrated current / gauge drop over a discharge session
+  * curve offsets   - gauge percent minus voltage estimate, per 5-point bin,
+                      so the voltage estimate tracks this pack's real curve
+  * internal R      - voltage sag / current step between consecutive samples,
+                      replacing the hand-measured R_INTERNAL_OHMS
+
+The tooltip also reports how long the pack has been discharging (or charging),
+an estimated time remaining / time to full from a smoothed average of the
+measured current, the pack capacity in use and the calibration state.
 
 Small per-run state (previous reading, integrated charge flow, stuck flag,
 averages) is kept in $XDG_RUNTIME_DIR/uconsole-battery.state, since waybar
@@ -42,6 +54,7 @@ Output modes:
   --percent       just the integer percentage (for scripts)
   --text          "<pct>% (<state>[, ~<time> left])"
   --force-voltage always display the voltage estimate (old behaviour / debugging)
+  --calibration   print the learned capacity / curve offsets / resistance as JSON
   --debug         dump config overrides, state and the stuck decision to stderr
 
 Package defaults live in the constants below. Device-specific values (pack
@@ -69,6 +82,8 @@ BATTERY_NAME = "axp20x-battery"
 # accuracy: too low and it reads pessimistic under load, too high optimistic.
 # Default 0.08 is the delta-V/delta-I value measured on a uConsole 2P Li-ion
 # pack (three runs, 0.074-0.083). Re-measure with uconsole-battery-calibrate.
+# A learned value (LEARN_RESISTANCE) takes precedence once it has enough
+# samples.
 R_INTERNAL_OHMS = 0.08
 
 # Clamp on the IR correction so a transient current spike can't throw the OCV
@@ -134,6 +149,27 @@ LEARN_CAPACITY = True
 # discharge session before a learned value is written.
 LEARN_MIN_DROP_PCT = 30.0
 
+# Coulomb-count fallback: while the gauge is stuck, display the last trusted
+# gauge value minus charge flowed since. If that drifts further than this many
+# points from the voltage estimate, re-anchor on the estimate.
+CC_REANCHOR_PCT = 15.0
+
+# Learn per-level offsets between the healthy gauge and the voltage estimate
+# (5-point bins of the estimate) and apply them to the estimate thereafter.
+LEARN_CURVE = True
+# Samples a bin needs before its offset is trusted (one sample per run).
+CAL_MIN_SAMPLES = 20
+# Clamp on the applied offset, so a misbehaving gauge can't drag the yardstick.
+CAL_MAX_OFFSET_PCT = 15.0
+
+# Learn the pack's internal resistance from consecutive discharging samples
+# whose current differs by at least R_LEARN_MIN_DI amps:  R = -dV / d|I|.
+LEARN_RESISTANCE = True
+R_LEARN_MIN_DI = 0.3
+R_LEARN_MAX_DT_S = 90.0
+# Load steps needed before the learned R replaces R_INTERNAL_OHMS.
+R_LEARN_MIN_SAMPLES = 10
+
 # Bar text. Python str.format fields: {pct} {volt} {amps} {watts} {remaining}
 # {status}. E.g. "{pct}% {volt:.2f}V" to show the voltage next to the percent.
 TEXT_FORMAT = "{pct}%"
@@ -160,9 +196,27 @@ CONFIG_TYPES = {
     "TIME_TO_FULL_MAX_PCT": float,
     "LEARN_CAPACITY": bool,
     "LEARN_MIN_DROP_PCT": float,
+    "CC_REANCHOR_PCT": float,
+    "LEARN_CURVE": bool,
+    "CAL_MIN_SAMPLES": int,
+    "CAL_MAX_OFFSET_PCT": float,
+    "LEARN_RESISTANCE": bool,
+    "R_LEARN_MIN_DI": float,
+    "R_LEARN_MAX_DT_S": float,
+    "R_LEARN_MIN_SAMPLES": int,
     "TEXT_FORMAT": str,
     "FORCE_VOLTAGE": bool,
 }
+
+# Plausibility bounds for a learned internal resistance (ohms).
+R_LEARN_MIN_OHMS, R_LEARN_MAX_OHMS = 0.02, 0.40
+# Running-mean memory for the calibration EMAs (samples).
+CAL_EMA_N = 200
+R_EMA_N = 100
+# Curve bin width (points of estimate) and how far outside the learned range
+# an edge offset is tapered to zero.
+CAL_BIN = 5
+CAL_TAPER_PCT = 10.0
 
 # -----------------------------------------------------------------------------
 
@@ -341,9 +395,79 @@ def save_state(state):
     write_json(state_path(), state)
 
 
+def state_home():
+    return os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+
+
 def learned_path():
-    base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
-    return os.path.join(base, "uconsole-battery", "capacity.json")
+    return os.path.join(state_home(), "uconsole-battery", "capacity.json")
+
+
+def calibration_path():
+    return os.path.join(state_home(), "uconsole-battery", "calibration.json")
+
+
+def load_calibration():
+    """Return the persisted curve-offset / resistance record (always a dict)."""
+    try:
+        with open(calibration_path()) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    if not isinstance(data.get("curve"), dict):
+        data["curve"] = {}
+    if not isinstance(data.get("r"), dict):
+        data["r"] = {}
+    return data
+
+
+def learned_r(cal):
+    """(ohms, samples) of the learned resistance, or (None, n) if untrusted."""
+    r = cal.get("r", {})
+    n = r.get("n", 0)
+    ohms = r.get("ohms")
+    if LEARN_RESISTANCE and is_num(ohms) and is_num(n) and n >= R_LEARN_MIN_SAMPLES:
+        return ohms, n
+    return None, n if is_num(n) else 0
+
+
+def trusted_bins(cal):
+    """Sorted [(bin centre, offset)] for bins with enough samples."""
+    out = []
+    for key, b in cal.get("curve", {}).items():
+        try:
+            lo = int(key)
+        except ValueError:
+            continue
+        if isinstance(b, dict) and is_num(b.get("n")) and is_num(b.get("offset")) \
+                and b["n"] >= CAL_MIN_SAMPLES:
+            out.append((lo + CAL_BIN / 2.0, float(b["offset"])))
+    return sorted(out)
+
+
+def curve_offset(cal, est_raw):
+    """Offset (points) to add to the raw voltage estimate at this level."""
+    if not LEARN_CURVE:
+        return 0.0
+    bins = trusted_bins(cal)
+    if not bins:
+        return 0.0
+    if est_raw <= bins[0][0]:
+        d = bins[0][0] - est_raw
+        off = bins[0][1] * max(0.0, 1.0 - d / CAL_TAPER_PCT)
+    elif est_raw >= bins[-1][0]:
+        d = est_raw - bins[-1][0]
+        off = bins[-1][1] * max(0.0, 1.0 - d / CAL_TAPER_PCT)
+    else:
+        off = bins[-1][1]
+        for (c0, o0), (c1, o1) in zip(bins, bins[1:]):
+            if c0 <= est_raw <= c1:
+                f = (est_raw - c0) / (c1 - c0) if c1 > c0 else 0.0
+                off = o0 + f * (o1 - o0)
+                break
+    return max(-CAL_MAX_OFFSET_PCT, min(CAL_MAX_OFFSET_PCT, off))
 
 
 def load_learned():
@@ -387,6 +511,10 @@ def assess_gauge(state, raw, status, est_pct, now, pack_mah, flow_inc):
     (stuck, reasons)."""
     reasons = []
     prev_raw = state.get("raw")
+    # Yardstick for recovery: the coulomb-counted fallback when we have one
+    # (it is the more accurate figure), else the voltage estimate.
+    cc = state.get("cc_pct")
+    ref_pct = cc if (state.get("anchor_valid") and is_num(cc)) else est_pct
     flow = state.get("flow_mah")
     flow = (float(flow) if is_num(flow) else 0.0) + flow_inc
     stuck = bool(state.get("stuck", False))
@@ -409,9 +537,9 @@ def assess_gauge(state, raw, status, est_pct, now, pack_mah, flow_inc):
                 or (status == "Charging" and raw > prev_raw)
                 or status not in ("Discharging", "Charging")
             )
-            if direction_ok and abs(raw - est_pct) <= RECOVER_AGREE_PCT:
+            if direction_ok and abs(raw - ref_pct) <= RECOVER_AGREE_PCT:
                 stuck = False
-                reasons.append(f"recovered: moved {prev_raw}->{raw}, est {est_pct:.0f}")
+                reasons.append(f"recovered: moved {prev_raw}->{raw}, ref {ref_pct:.0f}")
 
         # The charger reporting Full while the gauge reads full corroborates it.
         if stuck and status == "Full" and raw >= 99:
@@ -493,6 +621,84 @@ def track_session(state, status, raw, stuck, dt, gap_exceeded, i_avg, flow_inc, 
     return notes
 
 
+def track_anchor(state, raw, stuck, status, est, i_signed, dt, gap_exceeded, pack_mah):
+    """Maintain the coulomb-counted fallback percentage. Returns notes."""
+    notes = []
+    if not stuck and raw is not None:
+        state.update({"cc_pct": float(raw), "anchor_valid": True,
+                      "anchor_src": "gauge", "anchor_pct": raw})
+        return notes
+    cc = state.get("cc_pct")
+    valid = bool(state.get("anchor_valid")) and is_num(cc)
+    if valid and gap_exceeded:
+        valid = False
+        notes.append("coulomb anchor lost across sample gap")
+    if valid and dt > 0:
+        # i_signed < 0 while discharging, so the count falls.
+        cc += i_signed * dt / 3600.0 * 1000.0 / pack_mah * 100.0
+        cc = max(0.0, min(100.0, cc))
+    if valid and abs(cc - est) > CC_REANCHOR_PCT:
+        notes.append(f"coulomb count {cc:.0f} drifted from est {est:.0f}; re-anchored")
+        valid = False
+    if not valid:
+        cc = est
+        state.update({"anchor_src": "voltage", "anchor_pct": round(est, 1)})
+        if not state.get("anchor_valid"):
+            notes.append("anchored coulomb count on voltage estimate")
+    if status == "Full":
+        cc = 100.0
+    state.update({"cc_pct": cc, "anchor_valid": True})
+    return notes
+
+
+def learn_calibration(cal, state, kind, raw, stuck, est_raw, voltage, current, dt,
+                      gap_exceeded, now):
+    """Feed one sample into the curve-offset and resistance learners.
+    Returns (changed, notes)."""
+    notes = []
+    changed = False
+    gauge_ok = raw is not None and not stuck
+    if kind != "discharging":
+        return changed, notes
+
+    if LEARN_CURVE and gauge_ok and 5 < raw < 100 and est_raw < 97:
+        key = str(int(est_raw) // CAL_BIN * CAL_BIN)
+        b = cal["curve"].get(key)
+        if not isinstance(b, dict) or not is_num(b.get("n")) or not is_num(b.get("offset")):
+            b = {"n": 0, "offset": 0.0, "sessions": 0, "last_session": None}
+        sample = raw - est_raw
+        k = max(1.0 / (b["n"] + 1), 1.0 / CAL_EMA_N)
+        b["offset"] = round(b["offset"] + k * (sample - b["offset"]), 3)
+        b["n"] = b["n"] + 1
+        sess = state.get("status_since_ts")
+        if b.get("last_session") != sess:
+            b["sessions"] = (b.get("sessions") or 0) + 1
+            b["last_session"] = sess
+        cal["curve"][key] = b
+        changed = True
+
+    if LEARN_RESISTANCE and dt > 0 and dt <= R_LEARN_MAX_DT_S and not gap_exceeded:
+        lv, li = state.get("last_voltage"), state.get("last_current")
+        if is_num(lv) and is_num(li) and li < 0 and current < 0:
+            d_i = abs(current) - abs(li)
+            if abs(d_i) >= R_LEARN_MIN_DI:
+                r = -(voltage - lv) / d_i
+                if R_LEARN_MIN_OHMS <= r <= R_LEARN_MAX_OHMS:
+                    rr = cal["r"]
+                    n = rr.get("n", 0) if is_num(rr.get("n")) else 0
+                    ohms = rr.get("ohms") if is_num(rr.get("ohms")) else r
+                    k = max(1.0 / (n + 1), 1.0 / R_EMA_N)
+                    cal["r"] = {"ohms": round(ohms + k * (r - ohms), 5), "n": n + 1,
+                                "last_sample": round(r, 4), "updated_ts": now}
+                    changed = True
+                    notes.append(f"R sample {r:.3f} ohm (dI {d_i:+.2f} A) -> {cal['r']['ohms']:.4f}")
+                else:
+                    notes.append(f"R sample {r:.3f} ohm rejected")
+    if changed:
+        cal["updated_ts"] = now
+    return changed, notes
+
+
 def update_learned(state, raw, learned, pack_ref, now):
     """Write a learned capacity when the current session has seen enough drop.
     Returns the (possibly new) learned record."""
@@ -548,37 +754,61 @@ def estimate(force_voltage=False, debug=False):
     learned = load_learned() if LEARN_CAPACITY else None
     pack_mah = learned["capacity_mah"] if learned else pack_ref
 
+    cal = load_calibration()
+    r_learned, r_n = learned_r(cal)
+    r_used = r_learned if r_learned is not None else R_INTERNAL_OHMS
+    r_source = "learned" if r_learned is not None else "configured"
+
     # Reconstruct open-circuit voltage. Discharging (I<0) sags the terminal, so
     # add the drop back; charging (I>0) inflates it, so subtract.
-    ir = current * R_INTERNAL_OHMS
+    ir = current * r_used
     ir = max(-MAX_IR_CORRECTION_V, min(MAX_IR_CORRECTION_V, ir))
     ocv = voltage - ir
 
     state = load_state()
     debug_log(debug, f"state in:  {state}")
     now = time.time()
-    est = smooth(state, interpolate_soc(ocv))
+    est_raw = interpolate_soc(ocv)
+    offset = curve_offset(cal, est_raw)
+    est = smooth(state, max(0.0, min(100.0, est_raw + offset)))
     dt, gap_exceeded, i_avg = integrate_step(state, current, now)
+    last_i = state.get("last_current")
+    i_signed = (current + (last_i if is_num(last_i) else current)) / 2.0
     flow_inc = i_avg * dt / 3600.0 * 1000.0
     stuck, reasons = assess_gauge(state, raw_capacity, status, est, now, pack_mah, flow_inc)
     notes = track_session(state, status, raw_capacity, stuck, dt, gap_exceeded, i_avg, flow_inc, now)
     learned = update_learned(state, raw_capacity, learned, pack_ref, now)
     if learned:
         pack_mah, pack_source = learned["capacity_mah"], "learned"
-    state.update({"ts": now, "last_current": current})
+    notes += track_anchor(state, raw_capacity, stuck, status, est, i_signed, dt, gap_exceeded, pack_mah)
+    cal_changed, cal_notes = learn_calibration(cal, state, state.get("status_kind"), raw_capacity,
+                                               stuck, est_raw, voltage, current, dt, gap_exceeded, now)
+    notes += cal_notes
+    if cal_changed:
+        write_json(calibration_path(), cal)
+    state.update({"ts": now, "last_current": current, "last_voltage": voltage})
     save_state(state)
     debug_log(debug, f"state out: {state}")
-    debug_log(debug, f"pack {pack_mah:.0f} mAh ({pack_source}); raw {raw_capacity}; est {est:.1f}; "
+    debug_log(debug, f"pack {pack_mah:.0f} mAh ({pack_source}); R {r_used:.4f} ({r_source}, n={r_n}); "
+                     f"raw {raw_capacity}; est {est:.1f} (raw {est_raw:.1f} offset {offset:+.1f}); "
+                     f"cc {state.get('cc_pct'):.1f} ({state.get('anchor_src')}); "
                      f"stuck={stuck} {'; '.join(reasons + notes)}")
 
-    use_voltage = force_voltage or FORCE_VOLTAGE or stuck
+    use_voltage = force_voltage or FORCE_VOLTAGE
+    cc_pct = state.get("cc_pct")
     # A full pack sitting on the charger reads ~100 regardless of curve noise.
     if status == "Full":
         pct = 100.0
+        source = "gauge" if not stuck else "coulomb"
     elif use_voltage:
         pct = est
+        source = "voltage"
+    elif stuck:
+        pct = cc_pct if is_num(cc_pct) else est
+        source = "coulomb" if state.get("anchor_src") == "gauge" else "coulomb-voltage"
     else:
         pct = float(raw_capacity)
+        source = "gauge"
 
     pct_int = int(round(max(0.0, min(100.0, pct))))
     est_int = int(round(max(0.0, min(100.0, est))))
@@ -612,7 +842,15 @@ def estimate(force_voltage=False, debug=False):
         "raw_capacity": raw_capacity,
         "stuck": stuck,
         "forced": bool(force_voltage or FORCE_VOLTAGE),
-        "source": "voltage" if use_voltage else "gauge",
+        "source": source,
+        "anchor_pct": state.get("anchor_pct"),
+        "offset": offset,
+        "r_used": r_used,
+        "r_source": r_source,
+        "r_n": r_n,
+        "cal_bins": len(trusted_bins(cal)),
+        "cal_samples": sum(b.get("n", 0) for b in cal.get("curve", {}).values()
+                           if isinstance(b, dict) and is_num(b.get("n"))),
         "status_for_s": status_for,
         "status_since_boot": bool(state.get("status_since_boot")),
         "avg_current": i_ema if is_num(i_ema) else None,
@@ -672,10 +910,16 @@ def tooltip(st):
     raw_txt = f"{raw}%" if raw is not None else "unreadable"
     if st["source"] == "gauge":
         lines.append(f"Source: AXP223 gauge (voltage estimate {st['estimate']}%)")
-    elif st["forced"] and not st["stuck"]:
+    elif st["source"] == "voltage" and not st["stuck"]:
         lines.append(f"Source: voltage estimate (forced; AXP223 gauge {raw_txt})")
-    else:
+    elif st["source"] == "voltage":
         lines.append(f"Source: voltage estimate — AXP223 gauge stuck at {raw_txt}")
+    elif st["source"] == "coulomb":
+        lines.append(f"Source: charge count from last good gauge {st['anchor_pct']}% "
+                     f"(voltage est {st['estimate']}%) — AXP223 stuck at {raw_txt}")
+    else:
+        lines.append(f"Source: charge count from voltage est {st['anchor_pct']}% "
+                     f"(now {st['estimate']}%) — AXP223 stuck at {raw_txt}")
 
     if st["status_for_s"] is not None:
         label = {"discharging": "On battery", "charging": "Charging for"}.get(st["kind"], "On charger")
@@ -701,6 +945,11 @@ def tooltip(st):
     if st["kind"] == "discharging" and st["sess_valid"] and is_num(st["sess_start_pct"]):
         pack += f"; learning since {st['sess_start_pct']}%"
     lines.append(pack)
+    cal = f"Calibration: curve offset {st['offset']:+.1f} here"
+    cal += f" ({st['cal_bins']} bins, {st['cal_samples']} samples)" if st["cal_samples"] else " (none yet)"
+    cal += f"; R {st['r_used'] * 1000:.0f} mΩ ({st['r_source']}"
+    cal += f", {st['r_n']} steps)" if st["r_source"] == "learned" else (f", {st['r_n']} steps so far)" if st["r_n"] else ")")
+    lines.append(cal)
     return "\n".join(lines)
 
 
@@ -712,11 +961,23 @@ def main():
     g.add_argument("--text", action="store_true", help="print '<pct>% (<state>[, ~<time> left])'")
     ap.add_argument("--force-voltage", action="store_true",
                     help="always display the voltage estimate, ignoring the kernel gauge")
+    ap.add_argument("--calibration", action="store_true",
+                    help="print the learned capacity, curve offsets and resistance as JSON")
     ap.add_argument("--debug", action="store_true",
                     help="log config, state and the stuck decision to stderr")
     args = ap.parse_args()
 
     load_config(debug=args.debug)
+    if args.calibration:
+        cal = load_calibration()
+        print(json.dumps({
+            "capacity": load_learned(),
+            "curve": cal.get("curve"),
+            "trusted_bins": trusted_bins(cal),
+            "r": cal.get("r"),
+            "files": [learned_path(), calibration_path()],
+        }, indent=2))
+        return 0
     st = estimate(force_voltage=args.force_voltage, debug=args.debug)
     if st is None:
         if args.percent:
