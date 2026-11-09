@@ -1,55 +1,82 @@
 #!/usr/bin/env python3
-"""Voltage-based state-of-charge estimator for the uConsole's AXP223 PMIC.
+"""Battery gauge for the uConsole's AXP223 PMIC with a stuck-gauge fallback.
 
-The AXP223 fuel-gauge percentage register (the value the kernel exports as
-/sys/class/power_supply/axp20x-battery/capacity) gets stuck — on this board it
-pins at 100% even while the pack is clearly discharging. upower, waybar's
-built-in `battery` module, hyprlock and swaync all trust that number, so the
-whole desktop loses its battery indicator and you get no low-battery warning
-before a hard cutoff around 3.0 V.
+The AXP223 has a real coulomb-counting fuel gauge, exported by the kernel as
+/sys/class/power_supply/axp20x-battery/capacity, and when it works it is the
+best number available. But on these boards it periodically gets stuck — most
+often pinned at 100% while the pack is clearly discharging, sometimes frozen at
+some other value. upower, waybar's built-in `battery` module, hyprlock and
+swaync all trust it blindly, so a stuck gauge means no usable indicator and no
+low-battery warning before the hard cutoff around 3.2 V.
 
-The chip's voltage and current ADCs *are* accurate, so we ignore the broken
-percentage register and estimate SoC from the terminal voltage instead:
+The chip's voltage and current ADCs *are* reliable, so this script keeps an
+independent voltage-based state-of-charge estimate running alongside:
 
   OCV  = V_terminal + I_discharge * R_internal   (add IR drop back under load)
        = V_terminal - I_charge    * R_internal   (remove IR rise under charge)
   SoC  = interpolate(OCV) against a Li-ion open-circuit-voltage curve
 
-Output modes:
-  (default)    waybar custom-module JSON: {"text","percentage","tooltip","class"}
-  --percent    just the integer percentage (for scripts)
-  --text       "<pct>% (<state>)"
+and uses it to judge the kernel gauge:
 
-Tuning lives in the constants below; see the tweak README for the curve and
-how to calibrate R_INTERNAL_OHMS for your specific pack.
+  * healthy  -> display the kernel `capacity`
+  * stuck    -> display the voltage estimate until the gauge moves again
+
+"Stuck" is decided from (a) the classic 100%-while-discharging signature,
+(b) a gross disagreement with the voltage estimate, or (c) the reading not
+changing while a meaningful amount of charge has flowed in or out. Once
+flagged, the gauge is trusted again only after it moves to a plausible value.
+
+On top of that the tooltip reports how long the pack has been discharging (or
+charging), an estimated time remaining / time to full from a smoothed average
+of the measured current, and the pack capacity in use. Capacity is learned:
+over a discharge session the integrated current and the gauge's drop give the
+effective mAh directly, which is persisted in $XDG_STATE_HOME and used in place
+of the configured/device-tree value once enough of a session has been seen.
+
+Small per-run state (previous reading, integrated charge flow, stuck flag,
+averages) is kept in $XDG_RUNTIME_DIR/uconsole-battery.state, since waybar
+re-runs the script on an interval with no shared process.
+
+Output modes:
+  (default)       waybar custom-module JSON: {"text","alt","percentage","tooltip","class"}
+  --percent       just the integer percentage (for scripts)
+  --text          "<pct>% (<state>[, ~<time> left])"
+  --force-voltage always display the voltage estimate (old behaviour / debugging)
+  --debug         dump config overrides, state and the stuck decision to stderr
+
+Package defaults live in the constants below. Device-specific values (pack
+capacity, measured internal resistance, thresholds, bar text format) go in a
+config file — /etc/uconsole-battery.conf and/or ~/.config/uconsole-battery.conf,
+KEY=VALUE lines, later file wins. See the tweak README and
+uconsole-battery.conf.example.
 """
 
 import argparse
 import glob
 import json
+import math
 import os
 import sys
+import time
 
-# --- tunables ----------------------------------------------------------------
+# --- tunables (package defaults; override via config file) -------------------
 
 # Preferred power-supply name; falls back to the first Battery-type supply.
 BATTERY_NAME = "axp20x-battery"
 
 # Pack internal resistance (ohms), used to reconstruct open-circuit voltage from
-# the loaded terminal voltage. The single biggest lever on accuracy: too low and
-# the gauge reads pessimistic under load, too high and it reads optimistic.
-# Default 0.08 is the delta-V/delta-I measured value for the uConsole 2P Li-ion
-# pack (three runs, 0.074-0.083). Re-measure with uconsole-battery-calibrate; see
-# README.
+# the loaded terminal voltage. The single biggest lever on the estimate's
+# accuracy: too low and it reads pessimistic under load, too high optimistic.
+# Default 0.08 is the delta-V/delta-I value measured on a uConsole 2P Li-ion
+# pack (three runs, 0.074-0.083). Re-measure with uconsole-battery-calibrate.
 R_INTERNAL_OHMS = 0.08
 
 # Clamp on the IR correction so a transient current spike can't throw the OCV
 # wildly off the curve.
 MAX_IR_CORRECTION_V = 0.35
 
-# Exponential smoothing across invocations (0 = off, 1 = no smoothing). Waybar
-# calls us on an interval with no shared state, so we persist the last value in
-# XDG_RUNTIME_DIR and blend to damp current-spike jitter. Best-effort.
+# Exponential smoothing of the voltage estimate across invocations
+# (0 = frozen, 1 = no smoothing). Damps current-spike jitter.
 EMA_ALPHA = 0.5
 
 # Per-cell Li-ion open-circuit-voltage -> state-of-charge curve. Ordered high to
@@ -66,12 +93,148 @@ OCV_CURVE = [
 WARNING_PCT = 30
 CRITICAL_PCT = 15
 
+# Pack capacity in mAh. None = read charge_full_design from sysfs (the stock
+# device-tree value, 6700 mAh for the stock 2x 18650 pack). Set this in the
+# config file if you have fitted different cells. A learned value (see
+# LEARN_CAPACITY) takes precedence over both once available.
+PACK_CAPACITY_MAH = None
+PACK_CAPACITY_FALLBACK_MAH = 6700.0
+
+# Stuck-gauge rules. The gauge is flagged stuck when ANY of these trips:
+#  - it reads 100 while Discharging and the voltage estimate is below this:
+STUCK_FULL_MAX_EST_PCT = 85.0
+#  - it disagrees with the voltage estimate by more than this many points:
+STUCK_DISAGREE_PCT = 25.0
+#  - it has not changed while at least this much of the pack (percent of
+#    the pack capacity) has flowed in or out since it last changed:
+STUCK_NO_MOVE_PCT = 4.0
+# A flagged gauge is trusted again only when it moves to a new value, in the
+# direction the status implies, within this many points of the estimate:
+RECOVER_AGREE_PCT = 12.0
+# Cap on the time step used when integrating current across runs, so a suspend
+# or a stopped waybar doesn't book hours of phantom charge flow. A gap longer
+# than this also resets the runtime average and invalidates capacity learning.
+MAX_SAMPLE_GAP_S = 300.0
+
+# Runtime estimate: time constant (s) of the moving average of |current| that
+# the remaining-time figure divides by. Longer = steadier but slower to follow
+# a change in load.
+RUNTIME_TAU_S = 600.0
+# Don't show a remaining-time figure until this many seconds of samples have
+# been averaged since the charge/discharge status last changed.
+RUNTIME_MIN_SPAN_S = 60.0
+# Hide "time to full" above this percentage: the constant-voltage tail of the
+# charge makes the simple current-based figure meaningless up there.
+TIME_TO_FULL_MAX_PCT = 90.0
+
+# Learn the effective pack capacity from discharge sessions (gauge drop vs
+# integrated current) and persist it in $XDG_STATE_HOME/uconsole-battery/.
+LEARN_CAPACITY = True
+# Minimum gauge drop (points) within one uninterrupted, healthy-gauge
+# discharge session before a learned value is written.
+LEARN_MIN_DROP_PCT = 30.0
+
+# Bar text. Python str.format fields: {pct} {volt} {amps} {watts} {remaining}
+# {status}. E.g. "{pct}% {volt:.2f}V" to show the voltage next to the percent.
+TEXT_FORMAT = "{pct}%"
+
+# Always display the voltage estimate (ignore the gauge). Mostly for debugging.
+FORCE_VOLTAGE = False
+
+# Keys the config file may override, with the type to coerce the value to.
+CONFIG_TYPES = {
+    "BATTERY_NAME": str,
+    "R_INTERNAL_OHMS": float,
+    "MAX_IR_CORRECTION_V": float,
+    "EMA_ALPHA": float,
+    "WARNING_PCT": int,
+    "CRITICAL_PCT": int,
+    "PACK_CAPACITY_MAH": float,
+    "STUCK_FULL_MAX_EST_PCT": float,
+    "STUCK_DISAGREE_PCT": float,
+    "STUCK_NO_MOVE_PCT": float,
+    "RECOVER_AGREE_PCT": float,
+    "MAX_SAMPLE_GAP_S": float,
+    "RUNTIME_TAU_S": float,
+    "RUNTIME_MIN_SPAN_S": float,
+    "TIME_TO_FULL_MAX_PCT": float,
+    "LEARN_CAPACITY": bool,
+    "LEARN_MIN_DROP_PCT": float,
+    "TEXT_FORMAT": str,
+    "FORCE_VOLTAGE": bool,
+}
+
 # -----------------------------------------------------------------------------
+
+
+def debug_log(enabled, msg):
+    if enabled:
+        print(f"[uconsole-battery] {msg}", file=sys.stderr)
+
+
+def is_num(x):
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
+def config_paths():
+    xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return ["/etc/uconsole-battery.conf", os.path.join(xdg, "uconsole-battery.conf")]
+
+
+def coerce(value, typ):
+    if typ is bool:
+        v = value.strip().lower()
+        if v in ("1", "true", "yes", "on"):
+            return True
+        if v in ("0", "false", "no", "off"):
+            return False
+        raise ValueError(f"not a boolean: {value!r}")
+    if typ is int:
+        return int(float(value))
+    return typ(value)
+
+
+def load_config(debug=False):
+    """Apply KEY=VALUE overrides from the config files to the module globals."""
+    g = globals()
+    for path in config_paths():
+        try:
+            with open(path) as fh:
+                lines = fh.readlines()
+        except OSError:
+            continue
+        for lineno, line in enumerate(lines, 1):
+            s = line.strip()
+            if not s or s.startswith("#"):
+                continue
+            if "=" not in s:
+                debug_log(debug, f"{path}:{lineno}: ignoring malformed line {s!r}")
+                continue
+            key, _, value = s.partition("=")
+            key = key.strip()
+            value = value.strip()
+            if CONFIG_TYPES.get(key) is not str:
+                value = value.split("#", 1)[0].strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            if key not in CONFIG_TYPES:
+                debug_log(debug, f"{path}:{lineno}: unknown key {key!r} ignored")
+                continue
+            try:
+                g[key] = coerce(value, CONFIG_TYPES[key])
+            except ValueError as exc:
+                debug_log(debug, f"{path}:{lineno}: bad value for {key}: {exc}")
+                continue
+            debug_log(debug, f"{path}: {key} = {g[key]!r}")
+
+
+def sysfs_base():
+    return os.environ.get("UCONSOLE_BATTERY_SYSFS") or "/sys/class/power_supply"
 
 
 def find_battery():
     """Return the sysfs path of the battery supply, or None."""
-    base = "/sys/class/power_supply"
+    base = sysfs_base()
     preferred = os.path.join(base, BATTERY_NAME)
     if os.path.isdir(preferred):
         return preferred
@@ -102,6 +265,18 @@ def read_str(path, name):
         return None
 
 
+def boot_time():
+    """Wall-clock time the kernel booted, from /proc/stat, or None."""
+    try:
+        with open("/proc/stat") as fh:
+            for line in fh:
+                if line.startswith("btime "):
+                    return float(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
 def interpolate_soc(ocv):
     """Map a per-cell open-circuit voltage to a 0-100 SoC via the curve."""
     if ocv >= OCV_CURVE[0][0]:
@@ -115,29 +290,239 @@ def interpolate_soc(ocv):
     return 0.0
 
 
-def smooth(pct):
-    """Blend with the previous reading via EMA, persisted across runs."""
-    if EMA_ALPHA >= 1.0:
-        return pct
+def fmt_duration(seconds):
+    if seconds < 60:
+        return "<1m"
+    m = int(seconds // 60)
+    h, m = divmod(m, 60)
+    if h >= 48:
+        return ">48h"
+    return f"{h}h {m:02d}m" if h else f"{m}m"
+
+
+# --- persisted state ---------------------------------------------------------
+
+def state_path():
     runtime = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
-    state = os.path.join(runtime, "uconsole-battery.state")
-    prev = None
+    return os.path.join(runtime, "uconsole-battery.state")
+
+
+def load_state():
+    """Load the JSON state dict; tolerate the old bare-float format and junk."""
+    state = {}
     try:
-        with open(state) as fh:
-            prev = float(fh.read().strip())
-    except (OSError, ValueError):
-        prev = None
-    blended = pct if prev is None else EMA_ALPHA * pct + (1 - EMA_ALPHA) * prev
+        with open(state_path()) as fh:
+            raw = fh.read().strip()
+    except OSError:
+        return state
     try:
-        with open(state, "w") as fh:
-            fh.write(f"{blended:.3f}")
+        data = json.loads(raw)
+    except ValueError:
+        return state
+    if isinstance(data, dict):
+        state = data
+    elif is_num(data):
+        state = {"ema": float(data)}  # legacy format: bare EMA value
+    return state
+
+
+def write_json(path, data):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(data, fh)
+        os.replace(tmp, path)
     except OSError:
         pass
+
+
+def save_state(state):
+    write_json(state_path(), state)
+
+
+def learned_path():
+    base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    return os.path.join(base, "uconsole-battery", "capacity.json")
+
+
+def load_learned():
+    """Return the persisted learned-capacity record, or None."""
+    try:
+        with open(learned_path()) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if isinstance(data, dict) and is_num(data.get("capacity_mah")) and data["capacity_mah"] > 0:
+        return data
+    return None
+
+
+def smooth(state, pct):
+    """Blend the voltage estimate with the previous one via EMA."""
+    prev = state.get("ema")
+    if EMA_ALPHA >= 1.0 or not is_num(prev):
+        blended = pct
+    else:
+        blended = EMA_ALPHA * pct + (1 - EMA_ALPHA) * prev
+    state["ema"] = blended
     return blended
 
 
-def estimate():
-    """Return a dict describing the current battery state."""
+def integrate_step(state, current, now):
+    """Interval since the previous run: (dt capped, gap_exceeded, mean |I|)."""
+    prev_ts = state.get("ts")
+    last_i = state.get("last_current")
+    if not is_num(prev_ts):
+        return 0.0, False, abs(current)
+    gap = max(0.0, now - prev_ts)
+    i_prev = abs(last_i) if is_num(last_i) else abs(current)
+    return min(gap, MAX_SAMPLE_GAP_S), gap > MAX_SAMPLE_GAP_S, (abs(current) + i_prev) / 2.0
+
+
+# --- stuck-gauge assessment --------------------------------------------------
+
+def assess_gauge(state, raw, status, est_pct, now, pack_mah, flow_inc):
+    """Decide whether the kernel gauge is stuck. Updates `state`; returns
+    (stuck, reasons)."""
+    reasons = []
+    prev_raw = state.get("raw")
+    flow = state.get("flow_mah")
+    flow = (float(flow) if is_num(flow) else 0.0) + flow_inc
+    stuck = bool(state.get("stuck", False))
+
+    changed = raw is not None and prev_raw is not None and raw != prev_raw
+
+    if raw is None:
+        stuck = True
+        reasons.append("kernel capacity unreadable")
+    else:
+        if changed or prev_raw is None:
+            flow = 0.0
+            state["raw_changed_ts"] = now
+
+        # Recovery: the gauge moved, in a sensible direction, to a value that
+        # agrees with the estimate.
+        if stuck and changed:
+            direction_ok = (
+                (status == "Discharging" and raw < prev_raw)
+                or (status == "Charging" and raw > prev_raw)
+                or status not in ("Discharging", "Charging")
+            )
+            if direction_ok and abs(raw - est_pct) <= RECOVER_AGREE_PCT:
+                stuck = False
+                reasons.append(f"recovered: moved {prev_raw}->{raw}, est {est_pct:.0f}")
+
+        # The charger reporting Full while the gauge reads full corroborates it.
+        if stuck and status == "Full" and raw >= 99:
+            stuck = False
+            reasons.append("charger reports Full with gauge at full")
+
+        if raw == 100 and status == "Discharging" and est_pct < STUCK_FULL_MAX_EST_PCT:
+            stuck = True
+            reasons.append(f"reads 100 while discharging, est {est_pct:.0f}")
+        if abs(raw - est_pct) > STUCK_DISAGREE_PCT:
+            stuck = True
+            reasons.append(f"disagrees with est by {abs(raw - est_pct):.0f} pts")
+        limit = STUCK_NO_MOVE_PCT / 100.0 * pack_mah
+        if (not changed and prev_raw is not None
+                and status in ("Discharging", "Charging") and flow >= limit):
+            stuck = True
+            reasons.append(f"unchanged at {raw} after {flow:.0f} mAh flowed (limit {limit:.0f})")
+
+    state.update({"raw": raw, "flow_mah": flow, "stuck": stuck})
+    return stuck, reasons
+
+
+# --- session tracking: time on battery, runtime average, capacity learning ----
+
+def status_kind(status):
+    if status == "Discharging":
+        return "discharging"
+    if status == "Charging":
+        return "charging"
+    return "other"
+
+
+def track_session(state, status, raw, stuck, dt, gap_exceeded, i_avg, flow_inc, now):
+    """Update status timing, the runtime current average and the capacity-
+    learning session. Returns a list of debug notes."""
+    notes = []
+    kind = status_kind(status)
+    prev_kind = state.get("status_kind")
+    gauge_ok = raw is not None and not stuck
+
+    if kind != prev_kind:
+        since = now
+        since_boot = False
+        if prev_kind is None:
+            # Fresh state (boot, or first run of this version): the status has
+            # plausibly held since the kernel came up.
+            bt = boot_time()
+            if bt is not None and bt < now:
+                since, since_boot = bt, True
+        state.update({
+            "status_kind": kind,
+            "status_since_ts": since,
+            "status_since_boot": since_boot,
+            "i_ema": None,
+            "ema_span_s": 0.0,
+            "sess_valid": kind == "discharging" and gauge_ok,
+            "sess_start_pct": raw if (kind == "discharging" and gauge_ok) else None,
+            "sess_flow_mah": 0.0,
+        })
+        notes.append(f"status now {kind}" + (" (since boot)" if since_boot else ""))
+        return notes
+
+    if dt > 0 and not gap_exceeded:
+        k = 1.0 - math.exp(-dt / max(RUNTIME_TAU_S, 1.0))
+        i_ema = state.get("i_ema")
+        state["i_ema"] = i_avg if not is_num(i_ema) else i_ema + k * (i_avg - i_ema)
+        span = state.get("ema_span_s")
+        state["ema_span_s"] = (span if is_num(span) else 0.0) + dt
+        if state.get("sess_valid"):
+            sf = state.get("sess_flow_mah")
+            state["sess_flow_mah"] = (sf if is_num(sf) else 0.0) + flow_inc
+    if gap_exceeded:
+        state["i_ema"] = None
+        state["ema_span_s"] = 0.0
+        notes.append("sample gap exceeded; runtime average reset")
+    if state.get("sess_valid") and (gap_exceeded or not gauge_ok):
+        state["sess_valid"] = False
+        notes.append("capacity-learning session invalidated")
+    return notes
+
+
+def update_learned(state, raw, learned, pack_ref, now):
+    """Write a learned capacity when the current session has seen enough drop.
+    Returns the (possibly new) learned record."""
+    if not LEARN_CAPACITY or not state.get("sess_valid") or raw is None:
+        return learned
+    start = state.get("sess_start_pct")
+    flow = state.get("sess_flow_mah")
+    if not is_num(start) or not is_num(flow) or flow <= 0:
+        return learned
+    drop = start - raw
+    if drop < LEARN_MIN_DROP_PCT:
+        return learned
+    cap = flow / drop * 100.0
+    if not (0.5 * pack_ref <= cap <= 1.5 * pack_ref):
+        return learned
+    rec = {
+        "capacity_mah": round(cap, 1),
+        "updated_ts": now,
+        "drop_pct": drop,
+        "flow_mah": round(flow, 1),
+        "session_start_ts": state.get("status_since_ts"),
+    }
+    write_json(learned_path(), rec)
+    return rec
+
+
+# --- main estimate -----------------------------------------------------------
+
+def estimate(force_voltage=False, debug=False):
+    """Return a dict describing the current battery state, or None."""
     path = find_battery()
     if path is None:
         return None
@@ -153,29 +538,91 @@ def estimate():
     voltage = v_uv / 1e6
     current = (i_ua or 0) / 1e6  # amps; negative = discharging
 
+    # Reference capacity: config, else device tree, else fallback.
+    pack_ref = PACK_CAPACITY_MAH
+    pack_source = "configured"
+    if pack_ref is None:
+        cfd = read_int(path, "charge_full_design")
+        pack_ref = cfd / 1000.0 if cfd else PACK_CAPACITY_FALLBACK_MAH
+        pack_source = "device tree" if cfd else "default"
+    learned = load_learned() if LEARN_CAPACITY else None
+    pack_mah = learned["capacity_mah"] if learned else pack_ref
+
     # Reconstruct open-circuit voltage. Discharging (I<0) sags the terminal, so
     # add the drop back; charging (I>0) inflates it, so subtract.
     ir = current * R_INTERNAL_OHMS
     ir = max(-MAX_IR_CORRECTION_V, min(MAX_IR_CORRECTION_V, ir))
     ocv = voltage - ir
 
+    state = load_state()
+    debug_log(debug, f"state in:  {state}")
+    now = time.time()
+    est = smooth(state, interpolate_soc(ocv))
+    dt, gap_exceeded, i_avg = integrate_step(state, current, now)
+    flow_inc = i_avg * dt / 3600.0 * 1000.0
+    stuck, reasons = assess_gauge(state, raw_capacity, status, est, now, pack_mah, flow_inc)
+    notes = track_session(state, status, raw_capacity, stuck, dt, gap_exceeded, i_avg, flow_inc, now)
+    learned = update_learned(state, raw_capacity, learned, pack_ref, now)
+    if learned:
+        pack_mah, pack_source = learned["capacity_mah"], "learned"
+    state.update({"ts": now, "last_current": current})
+    save_state(state)
+    debug_log(debug, f"state out: {state}")
+    debug_log(debug, f"pack {pack_mah:.0f} mAh ({pack_source}); raw {raw_capacity}; est {est:.1f}; "
+                     f"stuck={stuck} {'; '.join(reasons + notes)}")
+
+    use_voltage = force_voltage or FORCE_VOLTAGE or stuck
     # A full pack sitting on the charger reads ~100 regardless of curve noise.
     if status == "Full":
         pct = 100.0
+    elif use_voltage:
+        pct = est
     else:
-        pct = smooth(interpolate_soc(ocv))
+        pct = float(raw_capacity)
 
     pct_int = int(round(max(0.0, min(100.0, pct))))
+    est_int = int(round(max(0.0, min(100.0, est))))
     power = abs(voltage * current)
+
+    # Time in the current status and the smoothed-rate time estimate.
+    kind = state.get("status_kind")
+    since = state.get("status_since_ts")
+    status_for = (now - since) if is_num(since) else None
+    i_ema = state.get("i_ema")
+    span = state.get("ema_span_s")
+    remaining_s = None
+    remaining_kind = None
+    if is_num(i_ema) and i_ema > 0.02 and is_num(span) and span >= RUNTIME_MIN_SPAN_S:
+        if kind == "discharging":
+            remaining_s = pct / 100.0 * pack_mah / 1000.0 / i_ema * 3600.0
+            remaining_kind = "remaining"
+        elif kind == "charging" and pct < TIME_TO_FULL_MAX_PCT:
+            remaining_s = (100.0 - pct) / 100.0 * pack_mah / 1000.0 / i_ema * 3600.0
+            remaining_kind = "to_full"
 
     return {
         "status": status,
+        "kind": kind,
         "voltage": voltage,
         "current": current,
         "ocv": ocv,
         "power": power,
         "percent": pct_int,
+        "estimate": est_int,
         "raw_capacity": raw_capacity,
+        "stuck": stuck,
+        "forced": bool(force_voltage or FORCE_VOLTAGE),
+        "source": "voltage" if use_voltage else "gauge",
+        "status_for_s": status_for,
+        "status_since_boot": bool(state.get("status_since_boot")),
+        "avg_current": i_ema if is_num(i_ema) else None,
+        "remaining_s": remaining_s,
+        "remaining_kind": remaining_kind,
+        "pack_mah": pack_mah,
+        "pack_source": pack_source,
+        "learned": learned,
+        "sess_valid": bool(state.get("sess_valid")),
+        "sess_start_pct": state.get("sess_start_pct"),
     }
 
 
@@ -191,6 +638,29 @@ def css_class(st):
     return "discharging"
 
 
+def remaining_text(st):
+    """Short remaining-time string for bar text / --text, or ''."""
+    if st["remaining_s"] is None:
+        return ""
+    t = fmt_duration(st["remaining_s"])
+    return f"~{t}" if st["remaining_kind"] == "remaining" else f"full in ~{t}"
+
+
+def bar_text(st):
+    fields = {
+        "pct": st["percent"],
+        "volt": st["voltage"],
+        "amps": st["current"],
+        "watts": st["power"],
+        "remaining": remaining_text(st),
+        "status": st["status"].lower(),
+    }
+    try:
+        return TEXT_FORMAT.format(**fields).strip()
+    except (KeyError, ValueError, IndexError):
+        return f"{st['percent']}%"
+
+
 def tooltip(st):
     lines = [
         f"Battery {st['percent']}% ({st['status'].lower()})",
@@ -198,19 +668,56 @@ def tooltip(st):
         f"Current: {st['current']:+.3f} A",
         f"Power:   {st['power']:.2f} W",
     ]
-    if st["raw_capacity"] is not None and st["raw_capacity"] != st["percent"]:
-        lines.append(f"(AXP223 gauge reports {st['raw_capacity']}% — stuck; ignored)")
+    raw = st["raw_capacity"]
+    raw_txt = f"{raw}%" if raw is not None else "unreadable"
+    if st["source"] == "gauge":
+        lines.append(f"Source: AXP223 gauge (voltage estimate {st['estimate']}%)")
+    elif st["forced"] and not st["stuck"]:
+        lines.append(f"Source: voltage estimate (forced; AXP223 gauge {raw_txt})")
+    else:
+        lines.append(f"Source: voltage estimate — AXP223 gauge stuck at {raw_txt}")
+
+    if st["status_for_s"] is not None:
+        label = {"discharging": "On battery", "charging": "Charging for"}.get(st["kind"], "On charger")
+        boot = " (since boot)" if st["status_since_boot"] else ""
+        lines.append(f"{label}: {fmt_duration(st['status_for_s'])}{boot}")
+    if st["kind"] in ("discharging", "charging"):
+        if st["remaining_s"] is not None:
+            avg_w = st["avg_current"] * st["voltage"]
+            if st["remaining_kind"] == "remaining":
+                lines.append(f"Remaining: ~{fmt_duration(st['remaining_s'])} at {avg_w:.1f} W avg")
+            else:
+                lines.append(f"Full in: ~{fmt_duration(st['remaining_s'])} at {avg_w:.1f} W avg")
+        elif st["kind"] == "charging" and st["percent"] >= TIME_TO_FULL_MAX_PCT:
+            lines.append("Full in: topping off")
+        else:
+            lines.append("Remaining: estimating…")
+
+    pack = f"Pack: {st['pack_mah']:.0f} mAh ({st['pack_source']}"
+    if st["pack_source"] == "learned" and st["learned"]:
+        day = time.strftime("%Y-%m-%d", time.localtime(st["learned"].get("updated_ts", 0)))
+        pack += f" {day} from {st['learned'].get('drop_pct', 0):.0f}% drop"
+    pack += ")"
+    if st["kind"] == "discharging" and st["sess_valid"] and is_num(st["sess_start_pct"]):
+        pack += f"; learning since {st['sess_start_pct']}%"
+    lines.append(pack)
     return "\n".join(lines)
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__)
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--percent", action="store_true", help="print integer percent only")
-    g.add_argument("--text", action="store_true", help="print '<pct>% (<state>)'")
+    g.add_argument("--text", action="store_true", help="print '<pct>% (<state>[, ~<time> left])'")
+    ap.add_argument("--force-voltage", action="store_true",
+                    help="always display the voltage estimate, ignoring the kernel gauge")
+    ap.add_argument("--debug", action="store_true",
+                    help="log config, state and the stuck decision to stderr")
     args = ap.parse_args()
 
-    st = estimate()
+    load_config(debug=args.debug)
+    st = estimate(force_voltage=args.force_voltage, debug=args.debug)
     if st is None:
         if args.percent:
             print("0")
@@ -223,15 +730,18 @@ def main():
     if args.percent:
         print(st["percent"])
     elif args.text:
-        print(f"{st['percent']}% ({st['status'].lower()})")
+        rem = remaining_text(st)
+        extra = f", {rem} left" if st["remaining_kind"] == "remaining" else (f", {rem}" if rem else "")
+        print(f"{st['percent']}% ({st['status'].lower()}{extra})")
     else:
         cls = css_class(st)
+        classes = [cls, "gauge-stuck"] if st["stuck"] else cls
         print(json.dumps({
-            "text": f"{st['percent']}%",
+            "text": bar_text(st),
             "alt": cls,  # waybar selects format-icons by `alt`; `class` drives CSS
             "percentage": st["percent"],
             "tooltip": tooltip(st),
-            "class": cls,
+            "class": classes,
         }))
     return 0
 
