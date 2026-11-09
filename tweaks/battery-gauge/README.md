@@ -146,6 +146,17 @@ The tooltip also carries:
   hidden above `TIME_TO_FULL_MAX_PCT` (90) because the constant-voltage tail
   makes the current-based figure meaningless there, and is optimistic below
   it.
+- **Charger** (while charging) — an *estimate* of charger output. The AXP223
+  has no ACIN voltage/current ADC (its IIO channels are the thermistor pin,
+  battery voltage, charge/discharge current and die temperature), so the
+  charger can't be measured. What can be: the power going into the pack
+  (`voltage_now × current_now`), plus the system's own draw, which is what the
+  pack was supplying during the last discharge (the 5-minute average, kept
+  across the plug-in). The line says `Charger: ~8.3 W est. (2.8 W into pack +
+  ~5.5 W system, from last discharge)`, or notes that the system draw hasn't
+  been measured yet if the device booted on the charger. The system draw is
+  as of the last discharge, so screen-off charging reads high and heavy use
+  reads low.
 - **Pack** — the capacity in use and where it came from: `configured`
   (`PACK_CAPACITY_MAH`), `device tree` (`charge_full_design`, 6700 mAh on the
   stock pack) or `learned`.

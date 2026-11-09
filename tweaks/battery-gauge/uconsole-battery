@@ -596,7 +596,7 @@ def status_kind(status):
     return "other"
 
 
-def track_session(state, status, raw, stuck, dt, gap_exceeded, i_avg, flow_inc, now):
+def track_session(state, status, raw, stuck, dt, gap_exceeded, i_avg, flow_inc, now, voltage):
     """Update status timing, the runtime current average and the capacity-
     learning session. Returns a list of debug notes."""
     notes = []
@@ -635,6 +635,10 @@ def track_session(state, status, raw, stuck, dt, gap_exceeded, i_avg, flow_inc, 
         state["i_ema"] = i_avg if not is_num(i_ema) else i_ema + k * (i_avg - i_ema)
         span = state.get("ema_span_s")
         state["ema_span_s"] = (span if is_num(span) else 0.0) + dt
+        if kind == "discharging" and state["ema_span_s"] >= RUNTIME_MIN_SPAN_S:
+            # What the system draws from the pack: the only handle we have on
+            # charger output later, since the AXP223 has no ACIN ADC.
+            state["sys_w"] = state["i_ema"] * voltage
         if state.get("sess_valid"):
             sf = state.get("sess_flow_mah")
             state["sess_flow_mah"] = (sf if is_num(sf) else 0.0) + flow_inc
@@ -821,7 +825,8 @@ def estimate(force_voltage=False, debug=False):
     flow_inc = i_avg * dt / 3600.0 * 1000.0
     stuck, reasons = assess_gauge(state, raw_capacity, status, est, now, pack_mah, flow_inc,
                                   gap_exceeded)
-    notes = track_session(state, status, raw_capacity, stuck, dt, gap_exceeded, i_avg, flow_inc, now)
+    notes = track_session(state, status, raw_capacity, stuck, dt, gap_exceeded, i_avg, flow_inc, now,
+                          voltage)
     learned = update_learned(state, raw_capacity, learned, pack_ref, now)
     if learned:
         pack_mah, pack_source = learned["capacity_mah"], "learned"
@@ -908,6 +913,7 @@ def estimate(force_voltage=False, debug=False):
         "remaining_s": remaining_s,
         "remaining_kind": remaining_kind,
         "remaining_basis": remaining_basis,
+        "sys_w": state.get("sys_w") if is_num(state.get("sys_w")) else None,
         "mah_per_pt": mah_per_pt if is_num(mah_per_pt) else None,
         "rate_moves": state.get("rate_moves") if is_num(state.get("rate_moves")) else 0,
         "pack_mah": pack_mah,
@@ -992,6 +998,14 @@ def tooltip(st):
             lines.append("Full in: topping off")
         else:
             lines.append("Remaining: estimating…")
+    if st["kind"] == "charging":
+        # No ACIN ADC on the AXP223: charger output = what goes into the pack
+        # (measured) + what the system takes (last seen on battery).
+        if st["sys_w"] is not None:
+            lines.append(f"Charger: ~{st['power'] + st['sys_w']:.1f} W est. "
+                         f"({st['power']:.1f} W into pack + ~{st['sys_w']:.1f} W system, from last discharge)")
+        else:
+            lines.append(f"Charger: {st['power']:.1f} W into pack + system draw (not yet measured)")
 
     pack = f"Pack: {st['pack_mah']:.0f} mAh ({st['pack_source']}"
     if st["pack_source"] == "learned" and st["learned"]:
