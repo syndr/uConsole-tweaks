@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STAGE="$SCRIPT_DIR/uconsole-tweaks"
-VERSION="${ENV_VERSION:-0.6.1}"
+VERSION="${ENV_VERSION:-0.6.2}"
 DKMS_NAME="ocp8178-backlight"
 
 rm -rf "$STAGE"

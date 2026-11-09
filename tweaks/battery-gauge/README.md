@@ -227,20 +227,25 @@ the plain battery widget**: no extra tooltip line, no menu.
 
 ### Tooltip line
 
-The last tooltip line says which governor is set and the service's own reason
-for it. The wording comes from the service's state
+The last tooltip line says which profile is in force and the service's own
+reason for it. The reason comes from the service's state
 (`/run/uconsole-sleep/cpu-governor.state`), never from the governor's name, so
-`powersave` is not assumed to mean a low battery:
+Power save is not assumed to mean a low battery:
 
 | Situation | Line |
 | --- | --- |
-| Battery under the service's low threshold | `CPU: powersave — automatic (battery below 20%)` |
-| Recovering, inside the hysteresis band | `CPU: powersave — automatic (holding until 25%)` |
-| Plugged in | `CPU: schedutil — automatic (on AC)` |
-| Otherwise | `CPU: schedutil — automatic` |
-| A profile was selected by hand | `CPU: performance — set manually (until reboot)` |
-| uConsole-sleep installed, service stopped or older than 1.8 | `CPU: powersave — governor service not running or older than 1.8` |
+| Battery under the service's low threshold | `CPU: Power save — automatic (battery below 20%)` |
+| Recovering, inside the hysteresis band | `CPU: Power save — automatic (holding until 25%)` |
+| Plugged in | `CPU: Balanced (schedutil) — automatic (on AC)` |
+| Otherwise | `CPU: Balanced (schedutil) — automatic` |
+| A profile was selected by hand | `CPU: Performance — set manually (until reboot)` |
+| uConsole-sleep installed, service stopped or older than 1.8 | `CPU: Power save — governor service not running or older than 1.8` |
 | uConsole-sleep not installed | no line |
+
+Profiles carry the names the menu uses: Performance (`performance`), Balanced
+(`schedutil`) and Power save (`powersave`). So in automatic mode the line also
+says which of them the service has currently chosen. Any other governor is
+shown by its own name.
 
 The percentages are the service's configured thresholds, read from its state.
 While a profile is selected by hand the module also gets a `cpu-manual` CSS
@@ -250,7 +255,7 @@ automatic logic is off.
 ### Selecting a profile
 
 ```sh
-uconsole-battery --cpu-profile                    # e.g. "schedutil — automatic (on AC)"
+uconsole-battery --cpu-profile                    # e.g. "Balanced (schedutil) — automatic (on AC)"
 uconsole-battery --set-cpu-profile performance    # or any available governor
 uconsole-battery --set-cpu-profile auto           # back to the automatic logic
 ```

@@ -947,6 +947,13 @@ def estimate(force_voltage=False, debug=False):
 # optional: without that package the widget is the plain battery widget.
 
 MENU_PROFILES = ("auto", "performance", "schedutil", "powersave")
+# What the menu (waybar-cpu-profile-menu.ui) calls each governor; the tooltip
+# uses the same words. Governors not in the menu are shown by name.
+PROFILE_LABELS = {
+    "performance": "Performance",
+    "schedutil": "Balanced",
+    "powersave": "Power save",
+}
 CPU_SET_WAIT_S = 3.0
 MSG_NEEDS_PACKAGE = "CPU profile control needs the uconsole-sleep package (>= 1.8)"
 MSG_NOT_RUNNING = "sleep-cpu-governor is not running or older than 1.8"
@@ -999,6 +1006,17 @@ def cpu_tier():
     return "stock", None
 
 
+def profile_name(governor):
+    """The menu's name for a governor, with the governor itself where the
+    name does not already say it: 'Balanced (schedutil)', 'Power save'."""
+    label = PROFILE_LABELS.get(governor)
+    if label is None:
+        return governor
+    if label.replace(" ", "").lower() == governor:
+        return label
+    return f"{label} ({governor})"
+
+
 def cpu_text(tier, state):
     """Governor and the daemon's own reason for it, or None in stock mode.
     Rendered from the state fields; the governor name alone says nothing
@@ -1007,8 +1025,8 @@ def cpu_text(tier, state):
         return None
     if tier == "degraded":
         gov = read_text(os.path.join(cpufreq_dir(), "scaling_governor")) or "unknown"
-        return f"{gov} — governor service not running or older than 1.8"
-    gov = str(state.get("governor") or "unknown")
+        return f"{profile_name(gov)} — governor service not running or older than 1.8"
+    gov = profile_name(str(state.get("governor") or "unknown"))
     if state.get("mode") == "manual":
         return f"{gov} — set manually (until reboot)"
     reason = state.get("reason")
