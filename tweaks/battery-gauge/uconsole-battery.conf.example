@@ -50,7 +50,11 @@
 
 ### Runtime estimate (tooltip "Remaining" / "Full in").
 # Time constant of the moving average of |current| the estimate divides by:
-#RUNTIME_TAU_S=600
+#RUNTIME_TAU_S=300
+# While the gauge is healthy, remaining charge is measured in the gauge's own
+# units: mAh of flow per point it moved, averaged over recent moves with this
+# EMA weight on the newest. Immune to a wrong PACK_CAPACITY_MAH.
+#RATE_ALPHA=0.4
 # Seconds of samples required since the status last changed before a figure
 # is shown:
 #RUNTIME_MIN_SPAN_S=60

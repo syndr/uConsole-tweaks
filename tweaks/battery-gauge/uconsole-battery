@@ -134,7 +134,13 @@ MAX_SAMPLE_GAP_S = 300.0
 # Runtime estimate: time constant (s) of the moving average of |current| that
 # the remaining-time figure divides by. Longer = steadier but slower to follow
 # a change in load.
-RUNTIME_TAU_S = 600.0
+RUNTIME_TAU_S = 300.0
+# While the gauge is healthy the estimate uses the gauge's own scale: mAh of
+# measured flow per point the gauge moved, averaged over recent moves (EMA
+# weight of the newest move). This is immune to a wrong PACK_CAPACITY_MAH and
+# to whatever capacity the AXP223 scales its percent against. The capacity
+# figure is only used before the first move and while the gauge is stuck.
+RATE_ALPHA = 0.4
 # Don't show a remaining-time figure until this many seconds of samples have
 # been averaged since the charge/discharge status last changed.
 RUNTIME_MIN_SPAN_S = 60.0
@@ -192,6 +198,7 @@ CONFIG_TYPES = {
     "RECOVER_AGREE_PCT": float,
     "MAX_SAMPLE_GAP_S": float,
     "RUNTIME_TAU_S": float,
+    "RATE_ALPHA": float,
     "RUNTIME_MIN_SPAN_S": float,
     "TIME_TO_FULL_MAX_PCT": float,
     "LEARN_CAPACITY": bool,
@@ -345,13 +352,19 @@ def interpolate_soc(ocv):
 
 
 def fmt_duration(seconds):
+    # No '<' or '>' here: waybar renders tooltips as Pango markup and a stray
+    # angle bracket blanks the whole tooltip.
     if seconds < 60:
-        return "<1m"
+        return "under 1m"
     m = int(seconds // 60)
     h, m = divmod(m, 60)
     if h >= 48:
-        return ">48h"
+        return "over 48h"
     return f"{h}h {m:02d}m" if h else f"{m}m"
+
+
+def markup_escape(text):
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 # --- persisted state ---------------------------------------------------------
@@ -506,11 +519,15 @@ def integrate_step(state, current, now):
 
 # --- stuck-gauge assessment --------------------------------------------------
 
-def assess_gauge(state, raw, status, est_pct, now, pack_mah, flow_inc):
+def assess_gauge(state, raw, status, est_pct, now, pack_mah, flow_inc, gap_exceeded=False):
     """Decide whether the kernel gauge is stuck. Updates `state`; returns
     (stuck, reasons)."""
     reasons = []
     prev_raw = state.get("raw")
+    if gap_exceeded:
+        # Flow during the gap was not seen, so the sit that spans it is not a
+        # clean mAh-per-point sample.
+        state["flow_gap"] = True
     # Yardstick for recovery: the coulomb-counted fallback when we have one
     # (it is the more accurate figure), else the voltage estimate.
     cc = state.get("cc_pct")
@@ -525,9 +542,16 @@ def assess_gauge(state, raw, status, est_pct, now, pack_mah, flow_inc):
         stuck = True
         reasons.append("kernel capacity unreadable")
     else:
+        if changed:
+            # Flow that accumulated while the gauge sat at prev_raw, and how
+            # far it then moved: the gauge's own mAh-per-point scale.
+            state["last_move_flow_mah"] = flow
+            state["last_move_pts"] = raw - prev_raw
+            state["last_move_gap"] = bool(state.get("flow_gap"))
         if changed or prev_raw is None:
             flow = 0.0
             state["raw_changed_ts"] = now
+            state["flow_gap"] = False
 
         # Recovery: the gauge moved, in a sensible direction, to a value that
         # agrees with the estimate.
@@ -558,7 +582,7 @@ def assess_gauge(state, raw, status, est_pct, now, pack_mah, flow_inc):
             stuck = True
             reasons.append(f"unchanged at {raw} after {flow:.0f} mAh flowed (limit {limit:.0f})")
 
-    state.update({"raw": raw, "flow_mah": flow, "stuck": stuck})
+    state.update({"raw": raw, "flow_mah": flow, "stuck": stuck, "moved": changed})
     return stuck, reasons
 
 
@@ -598,6 +622,9 @@ def track_session(state, status, raw, stuck, dt, gap_exceeded, i_avg, flow_inc, 
             "sess_valid": kind == "discharging" and gauge_ok,
             "sess_start_pct": raw if (kind == "discharging" and gauge_ok) else None,
             "sess_flow_mah": 0.0,
+            "mah_per_pt": None,
+            "rate_moves": 0,
+            "flow_gap": True,  # the flow behind the next move straddles statuses
         })
         notes.append(f"status now {kind}" + (" (since boot)" if since_boot else ""))
         return notes
@@ -615,6 +642,23 @@ def track_session(state, status, raw, stuck, dt, gap_exceeded, i_avg, flow_inc, 
         state["i_ema"] = None
         state["ema_span_s"] = 0.0
         notes.append("sample gap exceeded; runtime average reset")
+
+    # Gauge scale from this move: mAh that flowed while it sat, per point moved.
+    if (state.get("moved") and gauge_ok and not state.get("last_move_gap")
+            and kind in ("discharging", "charging")):
+        pts = state.get("last_move_pts")
+        mah = state.get("last_move_flow_mah")
+        expected_sign = -1 if kind == "discharging" else 1
+        if is_num(pts) and is_num(mah) and pts * expected_sign > 0 and mah > 0:
+            inst = mah / abs(pts)
+            prev = state.get("mah_per_pt")
+            moves = state.get("rate_moves") if is_num(state.get("rate_moves")) else 0
+            state["mah_per_pt"] = inst if not is_num(prev) else prev + RATE_ALPHA * (inst - prev)
+            state["rate_moves"] = moves + 1
+            notes.append(f"gauge moved {pts:+d} on {mah:.0f} mAh -> {state['mah_per_pt']:.1f} mAh/pt")
+    if not gauge_ok:
+        state["mah_per_pt"] = None
+        state["rate_moves"] = 0
     if state.get("sess_valid") and (gap_exceeded or not gauge_ok):
         state["sess_valid"] = False
         notes.append("capacity-learning session invalidated")
@@ -775,7 +819,8 @@ def estimate(force_voltage=False, debug=False):
     last_i = state.get("last_current")
     i_signed = (current + (last_i if is_num(last_i) else current)) / 2.0
     flow_inc = i_avg * dt / 3600.0 * 1000.0
-    stuck, reasons = assess_gauge(state, raw_capacity, status, est, now, pack_mah, flow_inc)
+    stuck, reasons = assess_gauge(state, raw_capacity, status, est, now, pack_mah, flow_inc,
+                                  gap_exceeded)
     notes = track_session(state, status, raw_capacity, stuck, dt, gap_exceeded, i_avg, flow_inc, now)
     learned = update_learned(state, raw_capacity, learned, pack_ref, now)
     if learned:
@@ -822,12 +867,18 @@ def estimate(force_voltage=False, debug=False):
     span = state.get("ema_span_s")
     remaining_s = None
     remaining_kind = None
+    remaining_basis = None
+    mah_per_pt = state.get("mah_per_pt")
+    if is_num(mah_per_pt) and not stuck:
+        per_pt, remaining_basis = mah_per_pt, "gauge rate"
+    else:
+        per_pt, remaining_basis = pack_mah / 100.0, "capacity"
     if is_num(i_ema) and i_ema > 0.02 and is_num(span) and span >= RUNTIME_MIN_SPAN_S:
         if kind == "discharging":
-            remaining_s = pct / 100.0 * pack_mah / 1000.0 / i_ema * 3600.0
+            remaining_s = pct * per_pt / 1000.0 / i_ema * 3600.0
             remaining_kind = "remaining"
         elif kind == "charging" and pct < TIME_TO_FULL_MAX_PCT:
-            remaining_s = (100.0 - pct) / 100.0 * pack_mah / 1000.0 / i_ema * 3600.0
+            remaining_s = (100.0 - pct) * per_pt / 1000.0 / i_ema * 3600.0
             remaining_kind = "to_full"
 
     return {
@@ -856,6 +907,9 @@ def estimate(force_voltage=False, debug=False):
         "avg_current": i_ema if is_num(i_ema) else None,
         "remaining_s": remaining_s,
         "remaining_kind": remaining_kind,
+        "remaining_basis": remaining_basis,
+        "mah_per_pt": mah_per_pt if is_num(mah_per_pt) else None,
+        "rate_moves": state.get("rate_moves") if is_num(state.get("rate_moves")) else 0,
         "pack_mah": pack_mah,
         "pack_source": pack_source,
         "learned": learned,
@@ -928,10 +982,12 @@ def tooltip(st):
     if st["kind"] in ("discharging", "charging"):
         if st["remaining_s"] is not None:
             avg_w = st["avg_current"] * st["voltage"]
-            if st["remaining_kind"] == "remaining":
-                lines.append(f"Remaining: ~{fmt_duration(st['remaining_s'])} at {avg_w:.1f} W avg")
+            if st["remaining_basis"] == "gauge rate":
+                basis = f"gauge rate {st['mah_per_pt']:.0f} mAh/pt over {st['rate_moves']} moves"
             else:
-                lines.append(f"Full in: ~{fmt_duration(st['remaining_s'])} at {avg_w:.1f} W avg")
+                basis = "from pack capacity"
+            label = "Remaining" if st["remaining_kind"] == "remaining" else "Full in"
+            lines.append(f"{label}: ~{fmt_duration(st['remaining_s'])} at {avg_w:.1f} W avg ({basis})")
         elif st["kind"] == "charging" and st["percent"] >= TIME_TO_FULL_MAX_PCT:
             lines.append("Full in: topping off")
         else:
@@ -950,7 +1006,7 @@ def tooltip(st):
     cal += f"; R {st['r_used'] * 1000:.0f} mΩ ({st['r_source']}"
     cal += f", {st['r_n']} steps)" if st["r_source"] == "learned" else (f", {st['r_n']} steps so far)" if st["r_n"] else ")")
     lines.append(cal)
-    return "\n".join(lines)
+    return markup_escape("\n".join(lines))
 
 
 def main():

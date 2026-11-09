@@ -109,6 +109,9 @@ the files to start over.
   mean replaces `R_INTERNAL_OHMS`. Useful when the pack has been changed and
   nobody re-ran the calibrate tool.
 
+Tooltip text is escaped for Pango markup; a literal `<` or `&` in it (for
+instance from `TEXT_FORMAT`) would otherwise blank the whole tooltip.
+
 The tooltip's last line summarises the state: `Calibration: curve offset +9.2
 here (6 bins, 412 samples); R 71 mΩ (learned, 38 steps)`.
 
@@ -128,13 +131,21 @@ The tooltip also carries:
   The runtime state is wiped at reboot, so on the first run after boot the
   status is assumed to have held since the kernel came up (marked "since
   boot"). Suspend time counts, as it should for a wall-clock figure.
-- **Remaining / Full in** — remaining charge (displayed percent × pack
-  capacity) divided by a moving average of the measured current with a
-  `RUNTIME_TAU_S` (600 s) time constant, so a brief load spike doesn't swing
-  it by an hour. Shown as "estimating…" until `RUNTIME_MIN_SPAN_S` (60 s) of
-  samples exist since the status last changed. Time to full is hidden above
-  `TIME_TO_FULL_MAX_PCT` (90) because the constant-voltage tail makes the
-  current-based figure meaningless there, and is optimistic below it.
+- **Remaining / Full in** — remaining charge divided by a moving average of
+  the measured current with a `RUNTIME_TAU_S` (300 s) time constant, so a
+  brief load spike doesn't swing it by an hour. Remaining charge is measured
+  in the gauge's own units whenever the gauge is healthy: each time it moves a
+  point, the mAh that flowed while it sat there is one sample of *mAh per
+  point*, averaged over recent moves (`RATE_ALPHA`). That makes the figure
+  immune to a wrong `PACK_CAPACITY_MAH` and to whatever capacity the AXP223
+  scales its percent against (on the author's unit the gauge moves about
+  three times faster than the nominal pack would suggest). Before the first
+  move, and while the gauge is stuck, the pack capacity is used instead; the
+  tooltip names the basis. Shown as "estimating…" until `RUNTIME_MIN_SPAN_S`
+  (60 s) of samples exist since the status last changed. Time to full is
+  hidden above `TIME_TO_FULL_MAX_PCT` (90) because the constant-voltage tail
+  makes the current-based figure meaningless there, and is optimistic below
+  it.
 - **Pack** — the capacity in use and where it came from: `configured`
   (`PACK_CAPACITY_MAH`), `device tree` (`charge_full_design`, 6700 mAh on the
   stock pack) or `learned`.
@@ -219,7 +230,8 @@ overrides were applied.
 | `STUCK_NO_MOVE_PCT` | Rule 3 threshold, percent of `PACK_CAPACITY_MAH`. Default `4.0`. |
 | `RECOVER_AGREE_PCT` | How close to the estimate a moved gauge must land to be trusted again. Default `12`. |
 | `MAX_SAMPLE_GAP_S` | Cap on the time step used when integrating current. Default `300`. |
-| `RUNTIME_TAU_S` | Time constant of the current average behind the runtime estimate. Default `600`. |
+| `RUNTIME_TAU_S` | Time constant of the current average behind the runtime estimate. Default `300`. |
+| `RATE_ALPHA` | EMA weight of the newest gauge move in the mAh-per-point scale. Default `0.4`. |
 | `RUNTIME_MIN_SPAN_S` | Samples needed before a runtime figure is shown. Default `60`. |
 | `TIME_TO_FULL_MAX_PCT` | Hide "Full in" above this. Default `90`. |
 | `LEARN_CAPACITY` | Learn the effective pack capacity from discharge sessions. Default `true`. |
