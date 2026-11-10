@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""CPU profile picker for the uconsole-battery waybar module, through rofi or
+fuzzel.
+
+An alternative to waybar's own popup menu (the "menu" / "menu-file" keys, see
+`uconsole-battery --waybar-menu-snippet`) for waybar builds without menu
+support, or for a keybind:
+
+    "on-click": "/usr/local/bin/uconsole-battery-profile-menu"
+
+Lists 'auto' and the governors the daemon reports, and hands the choice to
+`uconsole-battery --set-cpu-profile`. Needs uconsole-sleep >= 1.8; without it
+that command raises the "needs uconsole-sleep" notification.
+"""
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+
+def gauge():
+    beside = os.path.join(os.path.dirname(os.path.realpath(__file__)), "uconsole-battery")
+    return beside if os.access(beside, os.X_OK) else "uconsole-battery"
+
+
+def read_state():
+    run_dir = os.environ.get("UCONSOLE_SLEEP_RUN") or "/run/uconsole-sleep"
+    try:
+        with open(os.path.join(run_dir, "cpu-governor.state"), "r") as f:
+            state = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return state if isinstance(state, dict) else None
+
+
+def pick(prompt, entries):
+    """The chosen entry, '' if the picker was dismissed, None without a picker."""
+    if shutil.which("rofi"):
+        cmd = ["rofi", "-dmenu", "-i", "-p", prompt]
+    elif shutil.which("fuzzel"):
+        cmd = ["fuzzel", "--dmenu", "--prompt", prompt + ": "]
+    else:
+        return None
+    done = subprocess.run(cmd, input="\n".join(entries) + "\n", text=True,
+                          stdout=subprocess.PIPE)
+    return done.stdout.strip() if done.returncode == 0 else ""
+
+
+def main():
+    state = read_state()
+    if state is None:
+        # Let the gauge explain (and notify) why there is nothing to pick.
+        return subprocess.call([gauge(), "--set-cpu-profile", "auto"])
+    available = [g for g in state.get("available") or [] if isinstance(g, str)]
+    now = state.get("governor", "?")
+    how = "manual" if state.get("mode") == "manual" else "automatic"
+    choice = pick(f"CPU profile ({now}, {how})", ["auto"] + available)
+    if choice is None:
+        print("neither rofi nor fuzzel is installed", file=sys.stderr)
+        return 1
+    if not choice:
+        return 0
+    return subprocess.call([gauge(), "--set-cpu-profile", choice])
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -57,6 +57,12 @@ Output modes:
   --calibration   print the learned capacity / curve offsets / resistance as JSON
   --debug         dump config overrides, state and the stuck decision to stderr
 
+CPU governor (optional, needs uConsole-sleep >= 1.8; see the tweak README):
+  --cpu-profile             print the governor and why it is set
+  --set-cpu-profile WORD    select 'auto' or a governor for this boot
+  --waybar-menu-snippet     print the waybar keys that add the profile menu
+                            (--if-available: for config generators)
+
 Package defaults live in the constants below. Device-specific values (pack
 capacity, measured internal resistance, thresholds, bar text format) go in a
 config file — /etc/uconsole-battery.conf and/or ~/.config/uconsole-battery.conf,
@@ -69,6 +75,9 @@ import glob
 import json
 import math
 import os
+import shutil
+import signal
+import subprocess
 import sys
 import time
 
@@ -183,6 +192,11 @@ TEXT_FORMAT = "{pct}%"
 # Always display the voltage estimate (ignore the gauge). Mostly for debugging.
 FORCE_VOLTAGE = False
 
+# After --set-cpu-profile, waybar is sent SIGRTMIN+<this> so a module with
+# `"signal": <this>` re-runs the script at once instead of at its next
+# interval. --waybar-menu-snippet prints the matching key. 0 disables both.
+WAYBAR_SIGNAL = 13
+
 # Keys the config file may override, with the type to coerce the value to.
 CONFIG_TYPES = {
     "BATTERY_NAME": str,
@@ -213,6 +227,7 @@ CONFIG_TYPES = {
     "R_LEARN_MIN_SAMPLES": int,
     "TEXT_FORMAT": str,
     "FORCE_VOLTAGE": bool,
+    "WAYBAR_SIGNAL": int,
 }
 
 # Plausibility bounds for a learned internal resistance (ohms).
@@ -924,6 +939,267 @@ def estimate(force_voltage=False, debug=False):
     }
 
 
+# --- CPU governor (uConsole-sleep) --------------------------------------------
+#
+# sleep-cpu-governor (uConsole-sleep >= 1.8) publishes its decision in
+# /run/uconsole-sleep/cpu-governor.state and takes a profile request for the
+# current boot through /run/uconsole-sleep/cpu-profile. All of this is
+# optional: without that package the widget is the plain battery widget.
+
+MENU_PROFILES = ("auto", "performance", "schedutil", "powersave")
+# What the menu (waybar-cpu-profile-menu.ui) calls each governor; the tooltip
+# uses the same words. Governors not in the menu are shown by name.
+PROFILE_LABELS = {
+    "performance": "Performance",
+    "schedutil": "Balanced",
+    "powersave": "Power save",
+}
+CPU_SET_WAIT_S = 3.0
+MSG_NEEDS_PACKAGE = "CPU profile control needs the uconsole-sleep package (>= 1.8)"
+MSG_NOT_RUNNING = "sleep-cpu-governor is not running or older than 1.8"
+
+
+def sleep_run_dir():
+    return os.environ.get("UCONSOLE_SLEEP_RUN") or "/run/uconsole-sleep"
+
+
+def sleep_bin():
+    return os.environ.get("UCONSOLE_SLEEP_BIN") or "/usr/local/bin/sleep_cpu_governor"
+
+
+def cpufreq_dir():
+    return os.environ.get("UCONSOLE_CPUFREQ") or "/sys/devices/system/cpu/cpufreq/policy0"
+
+
+def menu_file():
+    return (os.environ.get("UCONSOLE_BATTERY_MENU_FILE")
+            or "/usr/share/uconsole-tweaks/waybar-cpu-profile-menu.ui")
+
+
+def read_text(path):
+    try:
+        with open(path, "r") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def read_cpu_state():
+    """The daemon's state as a dict, or None when it is not there."""
+    try:
+        with open(os.path.join(sleep_run_dir(), "cpu-governor.state"), "r") as f:
+            state = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return state if isinstance(state, dict) else None
+
+
+def cpu_tier():
+    """('full', state) with a running daemon >= 1.8 (it removes the state file
+    when it stops), ('degraded', None) when uConsole-sleep is installed but
+    there is no state, ('stock', None) when it is not installed."""
+    state = read_cpu_state()
+    if state is not None:
+        return "full", state
+    if os.path.exists(sleep_bin()):
+        return "degraded", None
+    return "stock", None
+
+
+def profile_name(governor):
+    """The menu's name for a governor, with the governor itself where the
+    name does not already say it: 'Balanced (schedutil)', 'Power save'."""
+    label = PROFILE_LABELS.get(governor)
+    if label is None:
+        return governor
+    if label.replace(" ", "").lower() == governor:
+        return label
+    return f"{label} ({governor})"
+
+
+def cpu_text(tier, state):
+    """Governor and the daemon's own reason for it, or None in stock mode.
+    Rendered from the state fields; the governor name alone says nothing
+    about why it is set."""
+    if tier == "stock":
+        return None
+    if tier == "degraded":
+        gov = read_text(os.path.join(cpufreq_dir(), "scaling_governor")) or "unknown"
+        return f"{profile_name(gov)} — governor service not running or older than 1.8"
+    gov = profile_name(str(state.get("governor") or "unknown"))
+    if state.get("mode") == "manual":
+        return f"{gov} — set manually (until reboot)"
+    reason = state.get("reason")
+    if reason == "low-battery" and is_num(state.get("enter_pct")):
+        return f"{gov} — automatic (battery below {state['enter_pct']:g}%)"
+    if reason == "low-battery":
+        return f"{gov} — automatic (low battery)"
+    if reason == "hold" and is_num(state.get("exit_pct")):
+        return f"{gov} — automatic (holding until {state['exit_pct']:g}%)"
+    if reason == "ac":
+        return f"{gov} — automatic (on AC)"
+    return f"{gov} — automatic"
+
+
+def cpu_available(state):
+    words = read_text(os.path.join(cpufreq_dir(), "scaling_available_governors")).split()
+    if not words and state and isinstance(state.get("available"), list):
+        words = [str(w) for w in state["available"]]
+    return words
+
+
+def notify(msg):
+    """Desktop notification, best effort: a waybar menu item has no terminal."""
+    exe = shutil.which("notify-send")
+    if not exe:
+        return
+    try:
+        subprocess.Popen([exe, "-a", "uconsole-battery", "CPU profile", msg],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+    except OSError:
+        pass
+
+
+def cpu_fail(msg, code=1):
+    print(msg, file=sys.stderr)
+    notify(msg)
+    return code
+
+
+def waybar_signal():
+    """The real-time signal number for WAYBAR_SIGNAL, or None when disabled.
+    Waybar does not handle SIGRTMIN+0, hence the lower bound."""
+    n = WAYBAR_SIGNAL
+    if not is_num(n) or not 1 <= n <= signal.SIGRTMAX - signal.SIGRTMIN:
+        return None
+    return signal.SIGRTMIN + int(n)
+
+
+def refresh_waybar():
+    """Make this user's waybar re-run the module now. Returns how many were
+    signalled. An unhandled real-time signal would kill the process, so only
+    a `waybar` that has a handler installed for it gets one."""
+    signum = waybar_signal()
+    if signum is None:
+        return 0
+    sent = 0
+    for stat_dir in glob.glob("/proc/[0-9]*"):
+        try:
+            if os.stat(stat_dir).st_uid != os.getuid():
+                continue
+            if read_text(os.path.join(stat_dir, "comm")) != "waybar":
+                continue
+            caught = 0
+            with open(os.path.join(stat_dir, "status"), "r") as f:
+                for line in f:
+                    if line.startswith("SigCgt:"):
+                        caught = int(line.split()[1], 16)
+                        break
+            if not caught >> (signum - 1) & 1:
+                continue
+            os.kill(int(os.path.basename(stat_dir)), signum)
+            sent += 1
+        except (OSError, ValueError):
+            continue
+    return sent
+
+
+def profile_applied(state, word):
+    return (state is not None and state.get("requested") == word
+            and (word == "auto" or state.get("governor") == word))
+
+
+def set_cpu_profile(word):
+    """Ask the daemon for `word` ('auto' or a governor) for this boot."""
+    tier, state = cpu_tier()
+    if tier == "stock":
+        return cpu_fail(MSG_NEEDS_PACKAGE)
+    if tier == "degraded":
+        return cpu_fail(MSG_NOT_RUNNING)
+    available = cpu_available(state)
+    if word != "auto" and word not in available:
+        return cpu_fail(f"unknown CPU profile '{word}'; choose auto or one of: "
+                        f"{' '.join(available)}", 2)
+    if profile_applied(state, word):
+        # Already in force; the daemon would not rewrite its state for this.
+        print(cpu_text("full", state))
+        refresh_waybar()
+        return 0
+
+    path = os.path.join(sleep_run_dir(), "cpu-profile")
+    started = time.time()
+    try:
+        # No O_CREAT: only the daemon creates the file, with its permissions.
+        fd = os.open(path, os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return cpu_fail(MSG_NOT_RUNNING)
+    except PermissionError:
+        return cpu_fail(f"no permission to write {path} (see CPU_PROFILE_GROUP in "
+                        "/etc/uconsole-sleep/config)")
+    except OSError as exc:
+        return cpu_fail(f"cannot write {path}: {exc}")
+    try:
+        os.write(fd, (word + "\n").encode())
+    finally:
+        os.close(fd)
+
+    deadline = time.monotonic() + CPU_SET_WAIT_S
+    while time.monotonic() < deadline:
+        state = read_cpu_state()
+        if (profile_applied(state, word) and is_num(state.get("ts"))
+                and state["ts"] >= started):
+            print(cpu_text("full", state))
+            refresh_waybar()
+            return 0
+        time.sleep(0.1)
+    return cpu_fail(f"'{word}' was saved but not applied within {CPU_SET_WAIT_S:g} s; "
+                    "is sleep-cpu-governor running?")
+
+
+def menu_snippet(trailing_comma=False):
+    exe = "/usr/local/bin/uconsole-battery"
+    width = max(len(p) for p in MENU_PROFILES) + 3
+    actions = ",\n".join(
+        f'    {(chr(34) + p + chr(34) + ":"):<{width}} "{exe} --set-cpu-profile {p}"'
+        for p in MENU_PROFILES)
+    # "signal" lets --set-cpu-profile refresh the module the moment a profile
+    # is applied (see refresh_waybar).
+    refresh = (f'"signal": {int(WAYBAR_SIGNAL)},\n'
+               if waybar_signal() is not None else "")
+    return (refresh +
+            '"menu": "on-click",\n'
+            f'"menu-file": "{menu_file()}",\n'
+            '"menu-actions": {\n'
+            f"{actions}\n"
+            "}" + ("," if trailing_comma else ""))
+
+
+def waybar_menu_snippet(if_available):
+    tier, _ = cpu_tier()
+    have_menu = os.path.isfile(menu_file())
+    if if_available:
+        # For config generators: the keys, comma-terminated so they can go
+        # anywhere in a module block, only when the menu would do something.
+        if tier == "stock" or not have_menu:
+            return 1
+        print(menu_snippet(trailing_comma=True))
+        return 0
+    print(menu_snippet())
+    note = {
+        "full": "uconsole-sleep >= 1.8 detected: the menu will work.",
+        "degraded": "uconsole-sleep is installed, but " + MSG_NOT_RUNNING
+                    + ": until it is, the menu items only raise a notification.",
+        "stock": "uconsole-sleep not detected: the menu items will only raise a "
+                 "notification until it (>= 1.8) is installed.",
+    }[tier]
+    print(f"# {note}", file=sys.stderr)
+    if not have_menu:
+        print(f"# {menu_file()} is missing (shipped by uconsole-tweaks >= 0.6.0).",
+              file=sys.stderr)
+    return 0
+
+
 def css_class(st):
     if st["status"] == "Charging":
         return "charging"
@@ -1020,6 +1296,8 @@ def tooltip(st):
     cal += f"; R {st['r_used'] * 1000:.0f} mΩ ({st['r_source']}"
     cal += f", {st['r_n']} steps)" if st["r_source"] == "learned" else (f", {st['r_n']} steps so far)" if st["r_n"] else ")")
     lines.append(cal)
+    if st.get("cpu"):
+        lines.append(f"CPU: {st['cpu']}")
     return markup_escape("\n".join(lines))
 
 
@@ -1035,9 +1313,33 @@ def main():
                     help="print the learned capacity, curve offsets and resistance as JSON")
     ap.add_argument("--debug", action="store_true",
                     help="log config, state and the stuck decision to stderr")
+    ap.add_argument("--cpu-profile", action="store_true",
+                    help="print the CPU governor and why it is set (needs uconsole-sleep >= 1.8)")
+    ap.add_argument("--set-cpu-profile", metavar="PROFILE",
+                    help="select 'auto' or a governor name for this boot")
+    ap.add_argument("--waybar-menu-snippet", action="store_true",
+                    help="print the waybar keys that add the CPU profile menu")
+    ap.add_argument("--if-available", action="store_true",
+                    help="with --waybar-menu-snippet: print the keys (comma-terminated) "
+                         "and exit 0 only if uconsole-sleep and the menu file are "
+                         "installed; otherwise print nothing and exit 1")
     args = ap.parse_args()
 
     load_config(debug=args.debug)
+    # The CPU profile commands never touch the battery or its state files.
+    if args.set_cpu_profile is not None:
+        return set_cpu_profile(args.set_cpu_profile)
+    if args.waybar_menu_snippet:
+        return waybar_menu_snippet(args.if_available)
+    cpu_mode, cpu_state = cpu_tier()
+    if args.cpu_profile:
+        if cpu_mode != "full":
+            print(MSG_NEEDS_PACKAGE if cpu_mode == "stock" else MSG_NOT_RUNNING,
+                  file=sys.stderr)
+            return 1
+        print(cpu_text(cpu_mode, cpu_state))
+        return 0
+
     if args.calibration:
         cal = load_calibration()
         print(json.dumps({
@@ -1066,7 +1368,13 @@ def main():
         print(f"{st['percent']}% ({st['status'].lower()}{extra})")
     else:
         cls = css_class(st)
-        classes = [cls, "gauge-stuck"] if st["stuck"] else cls
+        st["cpu"] = cpu_text(cpu_mode, cpu_state)
+        extra = []
+        if st["stuck"]:
+            extra.append("gauge-stuck")
+        if cpu_state is not None and cpu_state.get("mode") == "manual":
+            extra.append("cpu-manual")
+        classes = [cls] + extra if extra else cls
         print(json.dumps({
             "text": bar_text(st),
             "alt": cls,  # waybar selects format-icons by `alt`; `class` drives CSS

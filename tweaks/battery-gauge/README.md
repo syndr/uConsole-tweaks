@@ -210,11 +210,116 @@ up manually. See [`waybar-custom-uconsole-battery.jsonc`](waybar-custom-uconsole
    `#battery.warning` etc. CSS can be reused as `#custom-uconsole-battery.warning`.
    While the gauge is flagged stuck an extra `gauge-stuck` class is added, so
    `#custom-uconsole-battery.gauge-stuck { … }` can mark the fallback if you
-   like.
+   like. A `cpu-manual` class is added while a CPU profile is selected by
+   hand (see [CPU governor](#cpu-governor)).
 4. Reload waybar.
 
 Other consumers (e.g. `~/.config/hypr/scripts/Battery.sh`) can call
 `uconsole-battery --text` instead of reading `capacity` directly.
+
+## CPU governor
+
+Optional, and only with [uConsole-sleep](https://github.com/syndr/uConsole-sleep)
+**1.8 or newer** installed. Its `sleep-cpu-governor` service switches the CPU
+governor on battery level and AC state, and the battery widget is the natural
+place to see and steer that. **Without uConsole-sleep the widget is exactly
+the plain battery widget**: no extra tooltip line, no menu.
+
+### Tooltip line
+
+The last tooltip line says which profile is in force and the service's own
+reason for it. The reason comes from the service's state
+(`/run/uconsole-sleep/cpu-governor.state`), never from the governor's name, so
+Power save is not assumed to mean a low battery:
+
+| Situation | Line |
+| --- | --- |
+| Battery under the service's low threshold | `CPU: Power save — automatic (battery below 20%)` |
+| Recovering, inside the hysteresis band | `CPU: Power save — automatic (holding until 25%)` |
+| Plugged in | `CPU: Balanced (schedutil) — automatic (on AC)` |
+| Otherwise | `CPU: Balanced (schedutil) — automatic` |
+| A profile was selected by hand | `CPU: Performance — set manually (until reboot)` |
+| uConsole-sleep installed, service stopped or older than 1.8 | `CPU: Power save — governor service not running or older than 1.8` |
+| uConsole-sleep not installed | no line |
+
+Profiles carry the names the menu uses: Performance (`performance`), Balanced
+(`schedutil`) and Power save (`powersave`). So in automatic mode the line also
+says which of them the service has currently chosen. Any other governor is
+shown by its own name.
+
+The percentages are the service's configured thresholds, read from its state.
+While a profile is selected by hand the module also gets a `cpu-manual` CSS
+class, so `#custom-uconsole-battery.cpu-manual { … }` can mark that the
+automatic logic is off.
+
+### Selecting a profile
+
+```sh
+uconsole-battery --cpu-profile                    # e.g. "Balanced (schedutil) — automatic (on AC)"
+uconsole-battery --set-cpu-profile performance    # or any available governor
+uconsole-battery --set-cpu-profile auto           # back to the automatic logic
+```
+
+A selection is a **current-boot setting**: it survives a service restart,
+suspend and plugging / unplugging, and is gone after a reboot, when the
+service starts in automatic again. Nothing is written to disk.
+
+`--set-cpu-profile` waits up to 3 s for the service to apply the change and
+prints the resulting line. It exits 2 for an unknown profile and 1 when the
+service is not there; every failure is also raised as a desktop notification
+(`notify-send`, if installed), because a waybar menu item has no terminal to
+print to. Without uConsole-sleep the message is "CPU profile control needs the
+uconsole-sleep package (>= 1.8)".
+
+### Enable the CPU profile menu
+
+Waybar can pop up a menu when a module is clicked (`man waybar-menu`; tested
+with 0.12). The package
+installs the menu itself, `/usr/share/uconsole-tweaks/waybar-cpu-profile-menu.ui`
+(Automatic / Performance / Balanced = `schedutil` / Power save); the module
+only has to point at it:
+
+1. Install uConsole-sleep 1.8 or newer.
+2. Add the `signal`, `menu`, `menu-file` and `menu-actions` keys to the module: either
+   uncomment them at the end of
+   [`waybar-custom-uconsole-battery.jsonc`](waybar-custom-uconsole-battery.jsonc),
+   or paste the output of `uconsole-battery --waybar-menu-snippet` into **each**
+   `custom/uconsole-battery…` block of a config you already have. That command
+   also says whether uConsole-sleep is detected right now. Reload waybar.
+
+Left click then opens the menu. With the keys in place but no uConsole-sleep,
+the items do nothing except raise the "needs uconsole-sleep" notification.
+
+The keys include `"signal": 13`. Once a selection is applied,
+`--set-cpu-profile` sends waybar `SIGRTMIN+13`, and a module carrying that
+key re-runs at once, so the tooltip and the `cpu-manual` class do not wait
+for the next `interval`. The number must not be used by another module in
+your config, and a module can have only one `signal` key: if yours already
+has one, or 13 is taken, set `WAYBAR_SIGNAL` in the config file to the number
+to use (0 turns the refresh off) and the snippet follows it. Without the key
+everything still works, one interval late.
+
+For a waybar build without menu support, or for a keybind, there is
+`uconsole-battery-profile-menu`: the same choice through `rofi` or `fuzzel`
+(whichever is installed), listing every governor the service reports. Wire it
+as `"on-click": "/usr/local/bin/uconsole-battery-profile-menu"`.
+
+### For config generators
+
+A script that generates waybar config can enable the menu exactly when it
+would work, without knowing the keys:
+
+```sh
+if snippet="$(uconsole-battery --waybar-menu-snippet --if-available 2>/dev/null)"; then
+    # insert "$snippet" inside the custom/uconsole-battery module block
+fi
+```
+
+With `--if-available` the command prints the keys, comma-terminated so they
+can go anywhere inside the block, and exits 0 **only if** uConsole-sleep and
+the menu file are both installed; otherwise it prints nothing and exits 1.
+Older versions of `uconsole-battery` reject the option and exit non-zero, so
+the same test is safe against them.
 
 ## Configuration
 
@@ -294,3 +399,6 @@ you can sanity-check, and `--calibration` shows what has been learned.
 
 - **Hardware**: uConsole with the AXP223 PMIC (`/sys/class/power_supply/axp20x-battery`).
 - **Runtime**: `python3` (standard library only).
+- **Optional**: uConsole-sleep ≥ 1.8 for the CPU governor line and profile
+  menu; `notify-send` for their error notifications; `rofi` or `fuzzel` for
+  `uconsole-battery-profile-menu`.

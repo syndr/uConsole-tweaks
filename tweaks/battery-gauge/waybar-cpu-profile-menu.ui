@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CPU profile menu for the uconsole-battery waybar module.
+
+  Installed to /usr/share/uconsole-tweaks/waybar-cpu-profile-menu.ui and wired
+  up with the module's "menu" / "menu-file" / "menu-actions" keys; the object
+  ids below are the keys of "menu-actions". The uconsole-battery option
+  "waybar-menu-snippet" prints those keys. Needs uconsole-sleep >= 1.8.
+-->
+<interface>
+  <object class="GtkMenu" id="menu">
+    <child>
+      <object class="GtkMenuItem" id="auto">
+        <property name="label">Automatic</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkSeparatorMenuItem" id="separator"/>
+    </child>
+    <child>
+      <object class="GtkMenuItem" id="performance">
+        <property name="label">Performance</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkMenuItem" id="schedutil">
+        <property name="label">Balanced</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkMenuItem" id="powersave">
+        <property name="label">Power save</property>
+      </object>
+    </child>
+  </object>
+</interface>

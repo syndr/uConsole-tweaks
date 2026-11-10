@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STAGE="$SCRIPT_DIR/uconsole-tweaks"
-VERSION="${ENV_VERSION:-0.5.0}"
+VERSION="${ENV_VERSION:-0.6.2}"
 DKMS_NAME="ocp8178-backlight"
 
 rm -rf "$STAGE"
@@ -31,6 +31,16 @@ install -m 0755 "$SCRIPT_DIR/tweaks/battery-gauge/uconsole-battery" \
 
 install -m 0755 "$SCRIPT_DIR/tweaks/battery-gauge/uconsole-battery-calibrate" \
     "$STAGE/usr/local/bin/uconsole-battery-calibrate"
+
+# CPU profile menu for the waybar module (optional, needs uconsole-sleep >= 1.8).
+# Fixed path: `uconsole-battery --waybar-menu-snippet` and waybar configs refer
+# to it.
+mkdir -p "$STAGE/usr/share/uconsole-tweaks"
+install -m 0644 "$SCRIPT_DIR/tweaks/battery-gauge/waybar-cpu-profile-menu.ui" \
+    "$STAGE/usr/share/uconsole-tweaks/waybar-cpu-profile-menu.ui"
+
+install -m 0755 "$SCRIPT_DIR/tweaks/battery-gauge/uconsole-battery-profile-menu" \
+    "$STAGE/usr/local/bin/uconsole-battery-profile-menu"
 
 # Device-specific overrides live in /etc/uconsole-battery.conf or
 # ~/.config/uconsole-battery.conf; ship only the documented example.
@@ -84,7 +94,7 @@ Maintainer: syndr <syndr@ultroncore.net>
 Architecture: all
 Depends: python3, python3-evdev, keyd, dkms
 Recommends: python3-picamera2, python3-pyqt5, python3-opengl, python3-opencv
-Suggests: wl-clipboard, xclip
+Suggests: wl-clipboard, xclip, uconsole-sleep (>= 1.8)
 Description: Small standalone tweaks for the ClockworkPi uConsole.
  Ships:
    * zmk-cursor-scroll - hold the gamepad Select key to make the trackball
@@ -93,7 +103,9 @@ Description: Small standalone tweaks for the ClockworkPi uConsole.
      shows the AXP223 fuel gauge while it is moving and falls back to a
      voltage-based estimate when the gauge sticks (classically pinned at
      100%). Includes uconsole-battery-calibrate to measure the pack's
-     internal resistance for the estimator.
+     internal resistance for the estimator. With uconsole-sleep >= 1.8 the
+     tooltip also explains the CPU governor and an optional waybar menu
+     selects a CPU profile for the current boot.
    * keyd-uconsole - keyd config scoping to the ZMK keyboard sub-device and
      mapping Tab (hold) -> Super. Also enables the keyd virtual keyboard that
      zmk-cursor-scroll listens on.
