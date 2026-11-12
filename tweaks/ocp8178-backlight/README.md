@@ -14,9 +14,9 @@ Source: `drivers/video/backlight/ocp8178_bl.c` from [ak-rex/ClockworkPi-linux](h
 
 ## How it is installed
 
-The package ships the module source to `/usr/src/ocp8178-backlight-<version>/` and registers it with DKMS. DKMS builds it against the running kernel's headers and installs it under `/lib/modules/<kernel>/updates/dkms/`, which depmod prefers over the stock copy in `kernel/drivers/video/backlight/`. The kernel package is not modified; DKMS rebuilds the module automatically when a new kernel (with headers) is installed.
+The package ships the module source to `/usr/src/ocp8178-backlight-<version>/` and registers it with DKMS. At install time DKMS builds it for every installed kernel that has headers (the image ships a 4K and a 16K page-size kernel side by side) and installs it under `/lib/modules/<kernel>/updates/dkms/`, which depmod prefers over the stock copy in `kernel/drivers/video/backlight/`. The kernel package is not modified; DKMS rebuilds the module automatically when a new kernel (with headers) is installed.
 
-Requirements: `dkms` (declared dependency) and the headers for the running kernel (`linux-headers-$(uname -r)`, shipped alongside the kernel in the ClockworkPi apt repo).
+Requirements: `dkms` (declared dependency) and the headers for each kernel you boot (`linux-headers-<version>`, shipped alongside the kernel in the ClockworkPi apt repo).
 
 ## Activating it
 

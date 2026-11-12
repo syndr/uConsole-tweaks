@@ -24,7 +24,7 @@ For larger systems built around uConsole-specific behavior (sleep / power manage
 make install      # builds uconsole-tweaks.deb and runs `apt install -y ./uconsole-tweaks.deb`
 ```
 
-`apt install` of a local deb auto-resolves the declared `Depends:` (currently `python3`, `python3-evdev`, `keyd`, `dkms`), so you don't need a separate `make deps` step. The `ocp8178-backlight` module is built by DKMS at install time and needs the running kernel's headers (`linux-headers-$(uname -r)`, from the same ClockworkPi apt repo as the kernel). The `camera` tweak's libraries (`python3-picamera2`, `python3-pyqt5`, `python3-opengl`, `python3-opencv`) are `Recommends:`, which `apt` also installs by default.
+`apt install` of a local deb auto-resolves the declared `Depends:` (currently `python3`, `python3-evdev`, `keyd`, `dkms`), so you don't need a separate `make deps` step. The `ocp8178-backlight` module is built by DKMS at install time for every installed kernel that has headers (`linux-headers-<version>`, from the same ClockworkPi apt repo as the kernel), so both the 4K and 16K page-size kernels are covered. The `camera` tweak's libraries (`python3-picamera2`, `python3-pyqt5`, `python3-opengl`, `python3-opencv`) are `Recommends:`, which `apt` also installs by default.
 
 To just build the deb without installing:
 
