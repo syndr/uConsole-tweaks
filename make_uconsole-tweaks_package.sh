@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STAGE="$SCRIPT_DIR/uconsole-tweaks"
-VERSION="${ENV_VERSION:-0.4.0}"
+VERSION="${ENV_VERSION:-0.4.1}"
 DKMS_NAME="ocp8178-backlight"
 
 rm -rf "$STAGE"
@@ -94,8 +94,8 @@ Description: Small standalone tweaks for the ClockworkPi uConsole.
      module, laid out for the uConsole's 1280x720 screen (forked from
      Picamera2's app_full.py).
    * ocp8178-backlight - DKMS build of the backlight driver exposing all 32
-     levels of the OCP8178 instead of the stock driver's 10. Needs the
-     running kernel's headers (linux-headers-<version>).
+     levels of the OCP8178 instead of the stock driver's 10. Built for
+     every installed kernel that has headers (linux-headers-<version>).
 EOF
 
 # --- DEBIAN/postinst ----------------------------------------------------------
@@ -112,15 +112,28 @@ fi
 
 systemctl enable --now zmk-cursor-scroll.service
 
-# ocp8178-backlight: register and build the DKMS module for the running kernel.
+# ocp8178-backlight: register the DKMS module and build it for every installed
+# kernel that has headers, not just the running one. The ClockworkPi image ships
+# a 4K and a 16K page-size kernel side by side and config.txt picks between them.
 dkms add -m @DKMS_NAME@ -v @VERSION@ >/dev/null 2>&1 || true
-if dkms install -m @DKMS_NAME@ -v @VERSION@ -k "$(uname -r)"; then
-    echo "ocp8178-backlight: module built for $(uname -r)."
+built=0
+for build in /lib/modules/*/build; do
+    [ -e "$build/Makefile" ] || continue
+    kver=$(basename "$(dirname "$build")")
+    if dkms install -m @DKMS_NAME@ -v @VERSION@ -k "$kver"; then
+        echo "ocp8178-backlight: module built for $kver."
+        built=1
+    else
+        echo "ocp8178-backlight: DKMS build failed for $kver." >&2
+        echo "  Re-run later with: sudo dkms install @DKMS_NAME@/@VERSION@ -k $kver" >&2
+    fi
+done
+if [ "$built" = 1 ]; then
     echo "  Reboot to activate. Do not modprobe -r/modprobe it live: the panel driver keeps"
     echo "  its reference to the old backlight device and DPMS would leave the screen dark."
 else
-    echo "ocp8178-backlight: DKMS build failed (are linux-headers-$(uname -r) installed?)." >&2
-    echo "  Re-run later with: sudo dkms install @DKMS_NAME@/@VERSION@" >&2
+    echo "ocp8178-backlight: no module built (are the kernel headers installed?)." >&2
+    echo "  Re-run later with: sudo dkms autoinstall" >&2
 fi
 EOF
 sed -i "s/@DKMS_NAME@/$DKMS_NAME/g; s/@VERSION@/$VERSION/g" "$STAGE/DEBIAN/postinst"
